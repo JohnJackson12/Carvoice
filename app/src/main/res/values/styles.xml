@@ -1,6 +1,13 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- windowBackground/text colors are deliberately left to
+         Theme.MaterialComponents.DayNight itself rather than hardcoded -
+         that's what makes AppCompatDelegate.setDefaultNightMode() in
+         SettingsActivity actually switch between a real dark theme and a
+         real plain/light theme. A hardcoded android:windowBackground here
+         would silently override that and keep one background forever
+         regardless of the day/night setting. -->
     <style name="Theme.CarVoicePlayer" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <item name="colorPrimary">@color/brand_accent</item>
-        <item name="android:windowBackground">@color/brand_bg</item>
+        <item name="colorAccent">@color/brand_accent</item>
     </style>
 </resources>

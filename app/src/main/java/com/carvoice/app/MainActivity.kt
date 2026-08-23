@@ -5,17 +5,36 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.widget.Button
+import android.os.Handler
+import android.os.Looper
+import android.widget.EditText
+import android.widget.ImageButton
+import android.widget.SeekBar
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var statusText: TextView
-    private lateinit var nowPlayingText: TextView
-    private lateinit var logText: TextView
+    private lateinit var nowPlayingTitle: TextView
+    private lateinit var nowPlayingArtist: TextView
+    private lateinit var seekBar: SeekBar
+    private lateinit var volumeSeekBar: SeekBar
+    private lateinit var playPauseButton: ImageButton
+    private lateinit var searchBox: EditText
+    private lateinit var recyclerView: RecyclerView
+    private var logText: TextView? = null  // only present in the landscape layout
+
+    private lateinit var adapter: SongAdapter
+    private var allSongs: List<Song> = emptyList()
+    private var filteredSongs: List<Song> = emptyList()
+    private var libraryListener: (() -> Unit)? = null
+    private var userIsDraggingSeekBar = false
 
     private val requiredPermissions: Array<String>
         get() {
@@ -33,63 +52,149 @@ class MainActivity : AppCompatActivity() {
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        AppCompatDelegate.setDefaultNightMode(Prefs.nightMode(this))
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
         statusText = findViewById(R.id.statusText)
-        nowPlayingText = findViewById(R.id.nowPlayingText)
-        logText = findViewById(R.id.logText)
+        nowPlayingTitle = findViewById(R.id.nowPlayingTitle)
+        nowPlayingArtist = findViewById(R.id.nowPlayingArtist)
+        seekBar = findViewById(R.id.seekBar)
+        volumeSeekBar = findViewById(R.id.volumeSeekBar)
+        playPauseButton = findViewById(R.id.playPauseButton)
+        searchBox = findViewById(R.id.searchBox)
+        recyclerView = findViewById(R.id.songRecyclerView)
+        logText = findViewById(R.id.logText)  // null on portrait, that's fine
 
-        VoiceService.logCallback = { msg ->
+        adapter = SongAdapter(emptyList()) { index -> playFilteredIndex(index) }
+        recyclerView.layoutManager = LinearLayoutManager(this)
+        recyclerView.adapter = adapter
+
+        volumeSeekBar.max = 100
+        volumeSeekBar.progress = (Prefs.playbackVolume(this) * 100).toInt()
+        volumeSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (fromUser) VoiceService.instance?.setVolume(progress / 100f)
+                    ?: Prefs.setPlaybackVolume(this@MainActivity, progress / 100f)
+            }
+            override fun onStartTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?) {}
+        })
+
+        seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {}
+            override fun onStartTrackingTouch(sb: SeekBar?) { userIsDraggingSeekBar = true }
+            override fun onStopTrackingTouch(sb: SeekBar?) {
+                userIsDraggingSeekBar = false
+                VoiceService.instance?.seekTo(sb?.progress ?: 0)
+            }
+        })
+
+        playPauseButton.setOnClickListener {
+            val svc = VoiceService.instance ?: return@setOnClickListener
+            if (svc.isPlaying()) svc.pause() else svc.play()
+        }
+        findViewById<ImageButton>(R.id.nextButton).setOnClickListener { VoiceService.instance?.next() }
+        findViewById<ImageButton>(R.id.prevButton).setOnClickListener { VoiceService.instance?.previous() }
+        findViewById<ImageButton>(R.id.settingsButton).setOnClickListener {
+            startActivity(Intent(this, SettingsActivity::class.java))
+        }
+
+        searchBox.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) { applyFilter(s?.toString() ?: "") }
+        })
+
+        libraryListener = { runOnUiThread { onLibraryChanged() } }
+        MusicLibrary.addListener(libraryListener!!)
+
+        VoiceService.logCallback = { msg -> runOnUiThread { logText?.append("$msg\n") } }
+        VoiceService.nowPlayingCallback = { title, artist, playing ->
             runOnUiThread {
-                logText.append("$msg\n")
+                nowPlayingTitle.text = title
+                nowPlayingArtist.text = artist
+                playPauseButton.setImageResource(
+                    if (playing) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play
+                )
+                highlightPlayingRow()
             }
         }
-        VoiceService.nowPlayingCallback = { title ->
+        VoiceService.progressCallback = { position, duration ->
             runOnUiThread {
-                nowPlayingText.text = "Now: $title"
+                if (!userIsDraggingSeekBar) {
+                    seekBar.max = duration.coerceAtLeast(1)
+                    seekBar.progress = position
+                }
             }
-        }
-
-        findViewById<Button>(R.id.startButton).setOnClickListener {
-            if (hasAllPermissions()) {
-                startVoiceService()
-            } else {
-                ActivityCompat.requestPermissions(this, requiredPermissions, 100)
-            }
-        }
-
-        findViewById<Button>(R.id.stopButton).setOnClickListener {
-            stopService(Intent(this, VoiceService::class.java))
-            statusText.text = "Stopped."
         }
     }
 
-    private fun hasAllPermissions(): Boolean =
-        requiredPermissions.all {
-            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
-        }
+    override fun onResume() {
+        super.onResume()
+        onLibraryChanged()  // picks up anything Settings changed while we were away
+    }
 
-    override fun onRequestPermissionsResult(
-        requestCode: Int, permissions: Array<out String>, grantResults: IntArray
-    ) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (hasAllPermissions()) {
-            startVoiceService()
-        } else {
-            statusText.text = "Mic + storage + notification permissions are needed to run."
+    override fun onDestroy() {
+        libraryListener?.let { MusicLibrary.removeListener(it) }
+        VoiceService.logCallback = null
+        VoiceService.nowPlayingCallback = null
+        VoiceService.progressCallback = null
+        super.onDestroy()
+    }
+
+    private fun onLibraryChanged() {
+        allSongs = MusicLibrary.all()
+        applyFilter(searchBox.text?.toString() ?: "")
+    }
+
+    private fun applyFilter(query: String) {
+        filteredSongs = if (query.isBlank()) allSongs
+        else allSongs.filter {
+            it.title.contains(query, ignoreCase = true) || it.artist.contains(query, ignoreCase = true)
         }
+        adapter.updateSongs(filteredSongs, -1)
+        highlightPlayingRow()
+    }
+
+    private fun highlightPlayingRow() {
+        val playingTitle = nowPlayingTitle.text.toString()
+        val idx = filteredSongs.indexOfFirst { it.title == playingTitle }
+        adapter.playingIndex = idx
+    }
+
+    private fun playFilteredIndex(filteredIndex: Int) {
+        val song = filteredSongs.getOrNull(filteredIndex) ?: return
+        val realIndex = allSongs.indexOf(song)
+        if (realIndex >= 0) VoiceService.instance?.playSongAt(realIndex)
+    }
+
+    private fun hasAllPermissions(): Boolean =
+        requiredPermissions.all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }
+
+    override fun onStart() {
+        super.onStart()
+        if (hasAllPermissions()) startVoiceService()
+        else ActivityCompat.requestPermissions(this, requiredPermissions, 100)
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (hasAllPermissions()) startVoiceService()
+        else statusText.text = "Mic + storage + notification permissions are needed to run."
     }
 
     private fun startVoiceService() {
         val intent = Intent(this, VoiceService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(intent)
-        } else {
-            startService(intent)
-        }
-        val wakeList = CommandParser.wakePhrases().joinToString(" / ")
-        statusText.text = "Listening for: $wakeList — followed by play / pause / next / " +
-                "previous / play <song> / skip <N> seconds / trim <front> <back> / a 1-5 rating"
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
+        val wake = Prefs.wakeWord(this)
+        val aliases = Prefs.wakeAliases(this)
+        val wakeList = CommandParser.wakePhrases(wake, aliases).joinToString(" / ")
+        statusText.text = "Listening for: $wakeList"
+        // Give the service a moment to come up before syncing volume/library state.
+        Handler(Looper.getMainLooper()).postDelayed({
+            VoiceService.instance?.setVolume(Prefs.playbackVolume(this))
+            onLibraryChanged()
+        }, 800)
     }
 }

@@ -1,0 +1,58 @@
+package com.carvoice.app
+
+import android.graphics.Color
+import android.view.LayoutInflater
+import android.view.ViewGroup
+import androidx.recyclerview.widget.RecyclerView
+
+class SongAdapter(
+    private var songs: List<Song>,
+    private val onClick: (Int) -> Unit,
+) : RecyclerView.Adapter<SongAdapter.ViewHolder>() {
+
+    /** Index (into `songs`, the currently-displayed/filtered list) of the
+     * song that's actually playing right now - highlighted with a
+     * distinct background so it's obvious at a glance which track is
+     * current, same idea as the "now playing" row tag on the Windows
+     * app's song list. -1 means nothing playing is in the current
+     * (possibly filtered) view. */
+    var playingIndex: Int = -1
+        set(value) {
+            val old = field
+            field = value
+            if (old in songs.indices) notifyItemChanged(old)
+            if (value in songs.indices) notifyItemChanged(value)
+        }
+
+    class ViewHolder(view: android.view.View) : RecyclerView.ViewHolder(view) {
+        val title: android.widget.TextView = view.findViewById(R.id.songTitle)
+        val artist: android.widget.TextView = view.findViewById(R.id.songArtist)
+    }
+
+    fun updateSongs(newSongs: List<Song>, newPlayingIndex: Int) {
+        songs = newSongs
+        playingIndex = newPlayingIndex
+        notifyDataSetChanged()
+    }
+
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
+        val view = LayoutInflater.from(parent.context).inflate(R.layout.item_song, parent, false)
+        return ViewHolder(view)
+    }
+
+    override fun onBindViewHolder(holder: ViewHolder, position: Int) {
+        val song = songs[position]
+        holder.title.text = song.title
+        holder.artist.text = song.artist
+        if (position == playingIndex) {
+            holder.itemView.setBackgroundColor(
+                holder.itemView.context.getColor(R.color.now_playing_row)
+            )
+        } else {
+            holder.itemView.setBackgroundColor(Color.TRANSPARENT)
+        }
+        holder.itemView.setOnClickListener { onClick(position) }
+    }
+
+    override fun getItemCount(): Int = songs.size
+}

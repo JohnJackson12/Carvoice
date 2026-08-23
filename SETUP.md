@@ -38,9 +38,24 @@ anything to the project yourself.
 5. Open the app, tap **Start listening**, grant the mic/storage/notification
    permissions it asks for, and say "john play".
 
-## What this app actually does
-- Finds all the music already on your tablet automatically (no folder
-  setup needed).
+## What this app actually does now
+- **Real GUI**: song list + now-playing panel side by side in landscape
+  (rotates freely - "screenOrientation" is no longer locked to portrait,
+  which was the bug preventing this before), stacked vertically in
+  portrait.
+- **Library screen**: every song on the device, searchable by typing,
+  tap any song to play it. The currently-playing song is highlighted.
+- **Settings screen** (tap the gear icon): change the wake word/aliases,
+  **add specific music folders** via Android's real folder picker (for
+  an SD card or a folder MediaStore doesn't pick up), rescan the
+  library, switch Dark/Plain theme.
+- **Volume is now stable**: your chosen volume (the slider on the main
+  screen) is saved and is the ONLY baseline used everywhere - ducking
+  for a voice command or a spoken confirmation always restores to
+  exactly that level afterward, never to full volume and never stuck
+  low. This runs through Android's real audio-focus system rather than
+  a hand-rolled volume number, so it also plays correctly alongside
+  other apps that request audio focus.
 - Listens continuously in the background (foreground service, so it
   keeps working with the screen off) for wake words "john" and "sam"
   (each also works with "hey" in front - "hey john", "hey sam").
@@ -49,8 +64,7 @@ anything to the project yourself.
   40s in, stop 30s before the end - numbers are multiples of ten:
   zero/ten/twenty/thirty/forty/fifty/sixty), and a number 1-5 for rating.
 - Playlist wraps around at the end instead of stopping.
-- Speaks a short confirmation out loud after each command - meant to be
-  used without looking at the screen.
+- Speaks a short confirmation out loud after each command.
 
 ## Two things NOT wired up yet on this build (say so if you want them)
 - **Rating isn't saved** - a 1-5 rating is acknowledged out loud but not

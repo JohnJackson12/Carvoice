@@ -26,8 +26,8 @@ object CommandParser {
      * alias, each usable bare or with "hey" in front - so "sam" and "hey
      * sam" both work interchangeably. Longest-first so a prefix match
      * prefers "hey john" over the shorter "john" when both would match. */
-    fun wakePhrases(): List<String> {
-        val names = (listOf(WAKE) + WAKE_ALIASES).distinct()
+    fun wakePhrases(wake: String = WAKE, aliases: List<String> = WAKE_ALIASES): List<String> {
+        val names = (listOf(wake) + aliases).distinct()
         val phrases = mutableListOf<String>()
         for (n in names) {
             phrases.add(n)
@@ -36,9 +36,9 @@ object CommandParser {
         return phrases.distinct().sortedByDescending { it.length }
     }
 
-    fun findMatchingWake(text: String): String? {
-        for (wake in wakePhrases()) {
-            if (text == wake || text.startsWith("$wake ")) return wake
+    fun findMatchingWake(text: String, wake: String = WAKE, aliases: List<String> = WAKE_ALIASES): String? {
+        for (phrase in wakePhrases(wake, aliases)) {
+            if (text == phrase || text.startsWith("$phrase ")) return phrase
         }
         return null
     }
@@ -60,9 +60,9 @@ object CommandParser {
      * mirrors _build_grammar_phrases() in the desktop app's
      * voice_control.py. songTitleKeys are normalized titles (see
      * TextUtils.normalizeTitle) from whatever's actually in the library. */
-    fun grammarPhrases(songTitleKeys: List<String> = emptyList()): List<String> {
+    fun grammarPhrases(songTitleKeys: List<String> = emptyList(), wakeWord: String = WAKE, aliases: List<String> = WAKE_ALIASES): List<String> {
         val phrases = mutableListOf<String>()
-        for (wake in wakePhrases()) {
+        for (wake in wakePhrases(wakeWord, aliases)) {
             phrases.add(wake)
             for (cmd in listOf("delete", "undo", "next", "previous", "pause", "play", "status")) {
                 phrases.add("$wake $cmd")
