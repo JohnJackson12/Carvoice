@@ -25,12 +25,18 @@ object MusicLibrary {
         listeners.remove(l)
     }
 
-    /** Rebuilds the song list from the whole-device MediaStore scan PLUS
-     * any folders added via "Add Music Folder" in Settings. Call this at
-     * startup and after Settings changes the folder list. */
+    /** Rebuilds the song list from whatever folders you've explicitly
+     * added via "Add Music Folder" in Settings - PLUS the whole-device
+     * MediaStore library, but only if you've turned that on (it's off by
+     * default, on purpose: nothing shows up until you actually pick a
+     * folder, instead of silently pulling in every audio file on the
+     * device). Call this at startup and after Settings changes anything
+     * about which folders are included. */
     fun rescan(context: Context) {
         val result = mutableListOf<Song>()
-        result.addAll(scanMediaStore(context))
+        if (Prefs.useWholeDeviceLibrary(context)) {
+            result.addAll(scanMediaStore(context))
+        }
         for (uriString in Prefs.folderUris(context)) {
             try {
                 result.addAll(scanFolderTree(context, Uri.parse(uriString)))

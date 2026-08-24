@@ -9,6 +9,7 @@ import android.os.Handler
 import android.os.Looper
 import android.widget.EditText
 import android.widget.ImageButton
+import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
@@ -25,6 +26,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var nowPlayingArtist: TextView
     private lateinit var seekBar: SeekBar
     private lateinit var volumeSeekBar: SeekBar
+    private lateinit var trimStartSeekBar: SeekBar
+    private lateinit var trimEndSeekBar: SeekBar
+    private lateinit var trimLabel: TextView
+    private lateinit var ratingRow: LinearLayout
     private lateinit var playPauseButton: ImageButton
     private lateinit var searchBox: EditText
     private lateinit var recyclerView: RecyclerView
@@ -61,6 +66,11 @@ class MainActivity : AppCompatActivity() {
         nowPlayingArtist = findViewById(R.id.nowPlayingArtist)
         seekBar = findViewById(R.id.seekBar)
         volumeSeekBar = findViewById(R.id.volumeSeekBar)
+        trimStartSeekBar = findViewById(R.id.trimStartSeekBar)
+        trimEndSeekBar = findViewById(R.id.trimEndSeekBar)
+        trimLabel = findViewById(R.id.trimLabel)
+        ratingRow = findViewById(R.id.ratingRow)
+        buildRatingStars()
         playPauseButton = findViewById(R.id.playPauseButton)
         searchBox = findViewById(R.id.searchBox)
         recyclerView = findViewById(R.id.songRecyclerView)
@@ -88,6 +98,29 @@ class MainActivity : AppCompatActivity() {
                 userIsDraggingSeekBar = false
                 VoiceService.instance?.seekTo(sb?.progress ?: 0)
             }
+        })
+
+        // Trim start/end - saved (and applied - it seeks past the new
+        // start point right away) the moment you let go of the slider,
+        // same "drag to set, it's already saved" feel as the Windows
+        // app's trim handles. Both sliders share one apply function since
+        // the service call and the label always need both values together.
+        val applyTrim = {
+            VoiceService.instance?.setTrim(trimStartSeekBar.progress, trimEndSeekBar.progress)
+        }
+        trimStartSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (fromUser) updateTrimLabel(progress, trimEndSeekBar.progress)
+            }
+            override fun onStartTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?) { applyTrim() }
+        })
+        trimEndSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (fromUser) updateTrimLabel(trimStartSeekBar.progress, progress)
+            }
+            override fun onStartTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?) { applyTrim() }
         })
 
         playPauseButton.setOnClickListener {
@@ -128,11 +161,50 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+        VoiceService.ratingCallback = { rating -> runOnUiThread { setRatingStars(rating) } }
+        VoiceService.trimCallback = { front, end ->
+            runOnUiThread {
+                trimStartSeekBar.progress = front
+                trimEndSeekBar.progress = end
+                updateTrimLabel(front, end)
+            }
+        }
+    }
+
+    private fun buildRatingStars() {
+        ratingRow.removeAllViews()
+        for (i in 1..5) {
+            val star = TextView(this)
+            star.text = "\u2606"  // filled in setRatingStars() based on the saved rating
+            star.textSize = 26f
+            star.setPadding(6, 0, 6, 0)
+            star.setOnClickListener {
+                VoiceService.instance?.setRating(i)
+            }
+            ratingRow.addView(star)
+        }
+    }
+
+    private fun setRatingStars(rating: Int) {
+        for (i in 0 until ratingRow.childCount) {
+            (ratingRow.getChildAt(i) as? TextView)?.text = if (i < rating) "\u2605" else "\u2606"
+        }
+    }
+
+    private fun updateTrimLabel(front: Int, end: Int) {
+        trimLabel.text = "Trim: start ${front}s, end ${end}s"
     }
 
     override fun onResume() {
         super.onResume()
         onLibraryChanged()  // picks up anything Settings changed while we were away
+        VoiceService.instance?.let {
+            setRatingStars(it.currentRating())
+            val (front, end) = it.currentTrim()
+            trimStartSeekBar.progress = front
+            trimEndSeekBar.progress = end
+            updateTrimLabel(front, end)
+        }
     }
 
     override fun onDestroy() {
@@ -140,6 +212,8 @@ class MainActivity : AppCompatActivity() {
         VoiceService.logCallback = null
         VoiceService.nowPlayingCallback = null
         VoiceService.progressCallback = null
+        VoiceService.ratingCallback = null
+        VoiceService.trimCallback = null
         super.onDestroy()
     }
 

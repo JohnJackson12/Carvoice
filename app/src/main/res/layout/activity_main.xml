@@ -67,6 +67,13 @@
             android:layout_marginTop="4dp" />
 
         <LinearLayout
+            android:id="@+id/ratingRow"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:orientation="horizontal" />
+
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
@@ -120,6 +127,25 @@
                 android:layout_marginStart="8dp"
                 android:max="100" />
         </LinearLayout>
+
+        <TextView
+            android:id="@+id/trimLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Trim: start 0s, end 0s"
+            android:textSize="12sp"
+            android:textColor="?android:attr/textColorSecondary" />
+        <SeekBar
+            android:id="@+id/trimStartSeekBar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="60" />
+        <SeekBar
+            android:id="@+id/trimEndSeekBar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="60" />
 
         <EditText
             android:id="@+id/searchBox"

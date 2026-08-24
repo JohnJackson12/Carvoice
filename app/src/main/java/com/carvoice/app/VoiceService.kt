@@ -36,6 +36,12 @@ class VoiceService : Service(), RecognitionListener {
         var logCallback: ((String) -> Unit)? = null
         var nowPlayingCallback: ((title: String, artist: String, playing: Boolean) -> Unit)? = null
         var progressCallback: ((positionMs: Int, durationMs: Int) -> Unit)? = null
+        // Fired whenever the current song's rating/trim is known (right
+        // after a track loads, and after either one is changed) - lets
+        // the UI show what's already saved for THIS song rather than
+        // stale values left over from the previous one.
+        var ratingCallback: ((Int) -> Unit)? = null
+        var trimCallback: ((frontSeconds: Int, endSeconds: Int) -> Unit)? = null
 
         // Simple way for MainActivity's transport buttons to reach the
         // running service without binding - the service posts itself
@@ -155,7 +161,23 @@ class VoiceService : Service(), RecognitionListener {
         refreshRecognizer()
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_NOT_STICKY
+
+    /** Fires specifically when the app is swiped away from the recent-apps
+     * list - i.e. "closed/exited", as distinct from the screen just
+     * turning off or you switching to another app for a moment, neither
+     * of which call this. That distinction matters here: turning the mic
+     * off on every screen-off would defeat the whole point of this app
+     * (listening while the tablet is mounted and the screen is dark
+     * while driving) - it should only stop when you've actually chosen
+     * to close it. Also switched onStartCommand above to START_NOT_STICKY
+     * so Android doesn't auto-restart (and silently turn the mic back on)
+     * after this. */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        log("App closed - stopping voice control and playback.")
+        stopSelf()
+        super.onTaskRemoved(rootIntent)
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -245,6 +267,19 @@ class VoiceService : Service(), RecognitionListener {
             setVolume(baseVolume, baseVolume)  // always the persisted level, never a hardcoded default
             setOnCompletionListener { next() }
         }
+        // Pick up whatever trim points were saved for THIS song previously
+        // (same idea as the Windows app storing skip_intro/trim_end per
+        // song) - a fresh MediaPlayer always starts at 0, so re-apply the
+        // saved front-trim seek here rather than only when a new "trim"
+        // voice command / GUI change happens.
+        val uriKey = song.uri.toString()
+        val savedFront = SongMetadataStore.trimFront(this, uriKey)
+        val savedEnd = SongMetadataStore.trimEnd(this, uriKey)
+        if (savedFront > 0) mediaPlayer?.seekTo(savedFront * 1000)
+        trimEndSeconds = savedEnd
+        trimCallback?.invoke(savedFront, savedEnd)
+        ratingCallback?.invoke(SongMetadataStore.rating(this, uriKey))
+
         nowPlayingCallback?.invoke(song.title, song.artist, mediaPlayer?.isPlaying ?: false)
         updateNotification(song.title)
         if (announce) speak(song.title)
@@ -306,18 +341,42 @@ class VoiceService : Service(), RecognitionListener {
         mediaPlayer?.seekTo(positionMs.coerceIn(0, mediaPlayer?.duration ?: 0))
     }
 
+    private fun currentUriKey(): String? = MusicLibrary.all().getOrNull(currentIndex)?.uri?.toString()
+
+    /** Public so both the voice "rate" command and the GUI's star row call
+     * the exact same save path - can't disagree about what "rated" means. */
+    fun setRating(value: Int) {
+        val uriKey = currentUriKey() ?: return
+        SongMetadataStore.setRating(this, uriKey, value)
+        ratingCallback?.invoke(value)
+    }
+
+    fun currentRating(): Int {
+        val uriKey = currentUriKey() ?: return 0
+        return SongMetadataStore.rating(this, uriKey)
+    }
+
+    /** Public so both the voice "trim" command and the GUI's trim sliders
+     * call the exact same save+apply path. */
+    fun setTrim(frontSeconds: Int, endSeconds: Int) {
+        val mp = mediaPlayer ?: return
+        val uriKey = currentUriKey() ?: return
+        if (frontSeconds > 0) mp.seekTo(frontSeconds * 1000)
+        trimEndSeconds = endSeconds
+        SongMetadataStore.setTrim(this, uriKey, frontSeconds, endSeconds)
+        trimCallback?.invoke(frontSeconds, endSeconds)
+    }
+
+    fun currentTrim(): Pair<Int, Int> {
+        val uriKey = currentUriKey() ?: return 0 to 0
+        return SongMetadataStore.trimFront(this, uriKey) to SongMetadataStore.trimEnd(this, uriKey)
+    }
+
     private fun status() = speak(currentTitle().ifBlank { "nothing loaded" })
 
     private fun skip(seconds: Int) {
         val mp = mediaPlayer ?: return
         mp.seekTo((mp.currentPosition + seconds * 1000).coerceIn(0, mp.duration))
-    }
-
-    private fun trim(frontSeconds: Int, endSeconds: Int) {
-        val mp = mediaPlayer ?: return
-        if (frontSeconds > 0) mp.seekTo(frontSeconds * 1000)
-        trimEndSeconds = endSeconds
-        speak("trim set, $frontSeconds seconds from the start, $endSeconds from the end")
     }
 
     private fun playSongByTitleKey(titleKey: String) {
@@ -369,10 +428,15 @@ class VoiceService : Service(), RecognitionListener {
                 "status" -> status()
                 "delete", "undo" -> speak("not supported yet on this build")
             }
-            is CommandParser.Command.Rate ->
-                speak("rated ${cmd.value}, not saved - rating isn't wired up on this build yet")
+            is CommandParser.Command.Rate -> {
+                setRating(cmd.value)
+                speak("rated ${cmd.value}, saved")
+            }
             is CommandParser.Command.Skip -> skip(cmd.seconds)
-            is CommandParser.Command.Trim -> trim(cmd.frontSeconds, cmd.endSeconds)
+            is CommandParser.Command.Trim -> {
+                setTrim(cmd.frontSeconds, cmd.endSeconds)
+                speak("trim set, ${cmd.frontSeconds} seconds from the start, ${cmd.endSeconds} from the end, saved")
+            }
             is CommandParser.Command.PlaySong -> playSongByTitleKey(cmd.titleKey)
             null -> { /* not a recognized command - ignore */ }
         }

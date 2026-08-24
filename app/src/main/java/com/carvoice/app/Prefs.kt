@@ -12,6 +12,7 @@ object Prefs {
     private const val KEY_WAKE_ALIASES = "wake_aliases"
     private const val KEY_VOLUME = "playback_volume"       // 0.0-1.0, the level you actually chose
     private const val KEY_FOLDER_URIS = "folder_uris"      // SAF tree URIs added via "Add Music Folder"
+    private const val KEY_USE_WHOLE_DEVICE = "use_whole_device_library"  // off by default - see MusicLibrary.rescan()
     private const val KEY_NIGHT_MODE = "night_mode"        // AppCompatDelegate mode int, as a string
 
     private fun prefs(context: Context): SharedPreferences =
@@ -46,6 +47,13 @@ object Prefs {
         current.remove(uri)
         prefs(context).edit().putStringSet(KEY_FOLDER_URIS, current).apply()
     }
+
+    /** Off by default - MusicLibrary.rescan() shows nothing until you
+     * either add a folder or turn this on. */
+    fun useWholeDeviceLibrary(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_USE_WHOLE_DEVICE, false)
+    fun setUseWholeDeviceLibrary(context: Context, value: Boolean) =
+        prefs(context).edit().putBoolean(KEY_USE_WHOLE_DEVICE, value).apply()
 
     fun nightMode(context: Context): Int =
         prefs(context).getInt(KEY_NIGHT_MODE, androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES)

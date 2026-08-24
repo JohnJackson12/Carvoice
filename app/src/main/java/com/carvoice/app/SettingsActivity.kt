@@ -61,6 +61,13 @@ class SettingsActivity : AppCompatActivity() {
             folderPickerLauncher.launch(null)
         }
 
+        val wholeDeviceCheckbox = findViewById<android.widget.CheckBox>(R.id.wholeDeviceCheckbox)
+        wholeDeviceCheckbox.isChecked = Prefs.useWholeDeviceLibrary(this)
+        wholeDeviceCheckbox.setOnCheckedChangeListener { _, checked ->
+            Prefs.setUseWholeDeviceLibrary(this, checked)
+            rescanInBackground()
+        }
+
         findViewById<Button>(R.id.rescanButton).setOnClickListener {
             rescanInBackground()
         }

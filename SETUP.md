@@ -66,11 +66,17 @@ anything to the project yourself.
 - Playlist wraps around at the end instead of stopping.
 - Speaks a short confirmation out loud after each command.
 
-## Two things NOT wired up yet on this build (say so if you want them)
-- **Rating isn't saved** - a 1-5 rating is acknowledged out loud but not
-  written back to the song's file tags. Doing that on Android needs
-  MediaStore's tag-write permission flow (a user consent dialog per
-  write on newer Android versions) - a real but bigger addition.
+## Two things worth knowing about rating/trim on this build
+- **Rating and trim are now saved and persist** across restarts - by
+  voice ("john 4", "john trim forty thirty") or by tapping the stars /
+  dragging the trim sliders in the app. Whichever you use, they save to
+  the same place and stay in sync.
+- They're saved **inside the app**, not written into the song's own file
+  tags the way the Windows app does. Doing a real file-tag write on
+  Android needs a separate per-file user-consent flow
+  (`MediaStore.createWriteRequest`) - a real but separate addition from
+  this. Practically: the rating/trim will always show up again in this
+  app, but won't show up if you plug the file into another music player.
 - **"delete"/"undo"** are recognized but just say "not supported yet" -
   there's no trash-folder concept on Android the way the Windows app has.
 
