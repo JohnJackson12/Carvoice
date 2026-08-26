@@ -59,4 +59,40 @@ object Prefs {
         prefs(context).getInt(KEY_NIGHT_MODE, androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES)
     fun setNightMode(context: Context, mode: Int) =
         prefs(context).edit().putInt(KEY_NIGHT_MODE, mode).apply()
+
+    /** SKIP: a single GLOBAL, live value (seconds) - how far into EVERY
+     * song playback starts, current and future - not a per-song thing.
+     * Matches the Windows app's config.json "skip_seconds" / Player's
+     * set_skip_seconds(). Distinct from a song's own TRIM front-cut point
+     * (SongMetadataStore.trimFront) - see VoiceService.effectiveStart(),
+     * which takes whichever of the two is larger. */
+    private const val KEY_SKIP_SECONDS = "skip_seconds"
+    fun skipSeconds(context: Context): Int = prefs(context).getInt(KEY_SKIP_SECONDS, 0)
+    fun setSkipSeconds(context: Context, seconds: Int) =
+        prefs(context).edit().putInt(KEY_SKIP_SECONDS, seconds.coerceIn(0, 60)).apply()
+
+    /** Whether to auto-launch the app when the device finishes booting -
+     * for a tablet mounted in a car, that's effectively "open when the
+     * car turns on". Off by default: auto-starting anything on boot is
+     * worth an explicit opt-in rather than assuming it's wanted. */
+    private const val KEY_AUTO_START_ON_BOOT = "auto_start_on_boot"
+    fun autoStartOnBoot(context: Context): Boolean = prefs(context).getBoolean(KEY_AUTO_START_ON_BOOT, false)
+    fun setAutoStartOnBoot(context: Context, value: Boolean) =
+        prefs(context).edit().putBoolean(KEY_AUTO_START_ON_BOOT, value).apply()
+
+    /** Where playback was when the app last closed (gracefully OR abruptly -
+     * a car's ignition turning off is exactly the abrupt case, so this is
+     * saved periodically during playback, not just on a clean exit - see
+     * VoiceService's progress tick). Read back on next startup to resume
+     * right where it left off, automatically, with no taps needed. */
+    private const val KEY_LAST_SONG_URI = "last_song_uri"
+    private const val KEY_LAST_POSITION_MS = "last_position_ms"
+    fun lastSongUri(context: Context): String? = prefs(context).getString(KEY_LAST_SONG_URI, null)
+    fun lastPositionMs(context: Context): Int = prefs(context).getInt(KEY_LAST_POSITION_MS, 0)
+    fun setLastPlayback(context: Context, songUri: String, positionMs: Int) {
+        prefs(context).edit()
+            .putString(KEY_LAST_SONG_URI, songUri)
+            .putInt(KEY_LAST_POSITION_MS, positionMs)
+            .apply()
+    }
 }

@@ -3,4 +3,10 @@
     <color name="brand_accent">#4FD1C5</color>
     <color name="ic_launcher_background">#1B1F2A</color>
     <color name="now_playing_row">#264FD1C5</color>
+    <!-- Matches the Windows app's theme.py NOWPLAYING_RED exactly (#ff3b30) -
+         a fixed, always-the-same red used only to mark "this is playing
+         right now", deliberately not part of any theme palette so it never
+         gets visually swallowed by a selection highlight or a theme's own
+         accent color. -->
+    <color name="now_playing_text">#ff3b30</color>
 </resources>

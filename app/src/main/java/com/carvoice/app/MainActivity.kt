@@ -150,6 +150,14 @@ class MainActivity : AppCompatActivity() {
                 playPauseButton.setImageResource(
                     if (playing) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play
                 )
+                // Matches the Windows app's title_lbl turning
+                // NOWPLAYING_RED while actually playing (not just
+                // loaded/paused) - a quick glance tells you playing vs.
+                // paused without reading the play/pause icon.
+                nowPlayingTitle.setTextColor(
+                    if (playing) ContextCompat.getColor(this, R.color.now_playing_text)
+                    else defaultTextColor()
+                )
                 highlightPlayingRow()
             }
         }
@@ -235,6 +243,12 @@ class MainActivity : AppCompatActivity() {
         val playingTitle = nowPlayingTitle.text.toString()
         val idx = filteredSongs.indexOfFirst { it.title == playingTitle }
         adapter.playingIndex = idx
+    }
+
+    private fun defaultTextColor(): Int {
+        val typedValue = android.util.TypedValue()
+        theme.resolveAttribute(android.R.attr.textColorPrimary, typedValue, true)
+        return if (typedValue.resourceId != 0) ContextCompat.getColor(this, typedValue.resourceId) else typedValue.data
     }
 
     private fun playFilteredIndex(filteredIndex: Int) {

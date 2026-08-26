@@ -65,13 +65,30 @@ class VoiceService : Service(), RecognitionListener {
     private var focusRequest: AudioFocusRequest? = null
 
     private var trimEndSeconds = 0
+    // SKIP: a single GLOBAL, live value - matches the Windows app's
+    // config.json "skip_seconds" / Player.set_skip_seconds(). NOT a
+    // relative fast-forward (that's what this used to be here, which
+    // never actually matched what "skip" does on Windows even before
+    // that app's own v19 rework - see effectiveStart() below).
+    private var skipSeconds: Int = 0
     private val progressHandler = Handler(Looper.getMainLooper())
+    private var lastResumeSaveAt = 0L
     private val progressRunnable = object : Runnable {
         override fun run() {
             val mp = mediaPlayer
             if (mp != null) {
                 try {
                     progressCallback?.invoke(mp.currentPosition, mp.duration)
+                    // Saved periodically, not just on a clean exit - a
+                    // car's ignition turning off is an abrupt kill with no
+                    // chance for onDestroy()/onTaskRemoved() to run first,
+                    // so this is what actually makes "resume where I left
+                    // off" reliable in the real use case this is for.
+                    val now = System.currentTimeMillis()
+                    if (mp.isPlaying && now - lastResumeSaveAt > 3000) {
+                        persistResumeState()
+                        lastResumeSaveAt = now
+                    }
                     if (trimEndSeconds > 0 && mp.isPlaying) {
                         val cutoffMs = mp.duration - (trimEndSeconds * 1000)
                         if (cutoffMs > 0 && mp.currentPosition >= cutoffMs) {
@@ -87,13 +104,52 @@ class VoiceService : Service(), RecognitionListener {
         }
     }
 
+    private val libraryListener: () -> Unit = { onLibraryChanged() }
+
     private fun log(msg: String) = logCallback?.invoke(msg)
+
+    /** Loads from wherever playback was left off last time (survives both
+     * a clean exit AND an abrupt one - a car's ignition turning off never
+     * gives an app a graceful shutdown, so this relies on the periodic
+     * save in progressRunnable, not just onDestroy) and starts playing
+     * immediately, with no taps needed - matches the point of auto-open
+     * on boot: minimal touch after setup. Reads from the instantly-loaded
+     * cache, not the (slower) fresh rescan, so this doesn't wait on a
+     * large library's folder scan to finish first. Falls back to the
+     * first song, cued but NOT auto-played, if there's no saved position
+     * yet (first run) or the saved song isn't in the cache (e.g. it was
+     * removed from the library since). */
+    private fun resumeLastPlaybackOrDefault() {
+        val list = MusicLibrary.all()
+        if (list.isEmpty()) return
+        val savedUri = Prefs.lastSongUri(this)
+        val savedIndex = if (savedUri != null) list.indexOfFirst { it.uri.toString() == savedUri } else -1
+        if (savedIndex == -1) {
+            currentIndex = 0
+            loadCurrentTrack(announce = false)
+            return
+        }
+        currentIndex = savedIndex
+        loadCurrentTrack(announce = false)
+        val uriKey = list[savedIndex].uri.toString()
+        val effectiveStartMs = maxOf(skipSeconds, SongMetadataStore.trimFront(this, uriKey)) * 1000
+        val resumeAtMs = maxOf(Prefs.lastPositionMs(this), effectiveStartMs)
+        mediaPlayer?.seekTo(resumeAtMs)
+        play()
+    }
+
+    private fun persistResumeState() {
+        val uriKey = currentUriKey() ?: return
+        val position = mediaPlayer?.currentPosition ?: return
+        Prefs.setLastPlayback(this, uriKey, position)
+    }
 
     override fun onCreate() {
         super.onCreate()
         instance = this
         audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
         baseVolume = Prefs.playbackVolume(this)
+        skipSeconds = Prefs.skipSeconds(this)
 
         createNotificationChannel()
         startForeground(NOTIF_ID, buildNotification("Starting..."))
@@ -110,12 +166,17 @@ class VoiceService : Service(), RecognitionListener {
             override fun onError(utteranceId: String?) { abandonDuckFocus() }
         })
 
-        MusicLibrary.addListener { onLibraryChanged() }
-        if (MusicLibrary.all().isEmpty()) MusicLibrary.rescan(this)
-        if (currentIndex == -1 && MusicLibrary.all().isNotEmpty()) {
-            currentIndex = 0
-            loadCurrentTrack(announce = false)
-        }
+        MusicLibrary.addListener(libraryListener)
+        // Folder scanning (especially SAF folder trees) is IPC-bound and
+        // can genuinely take a while for a large, multi-folder library -
+        // doing this on the main thread inside onCreate() risks an ANR.
+        // A cached list loads instantly so something's usually already
+        // playable while the real rescan runs in the background.
+        MusicLibrary.loadCache(this)
+        resumeLastPlaybackOrDefault()
+        Thread {
+            MusicLibrary.rescan(this)
+        }.start()
 
         log("Unpacking speech model (first run only)...")
         StorageService.unpack(
@@ -127,19 +188,40 @@ class VoiceService : Service(), RecognitionListener {
         progressHandler.post(progressRunnable)
     }
 
+    // "<wake> play <song title>" adds one grammar phrase per song per wake
+    // variant. Vosk's grammar-locked recognizer is built for hundreds, maybe
+    // low thousands of phrases - a very large library (tens of thousands of
+    // songs) would blow that up to tens of thousands of phrases, risking a
+    // slow/fragile recognizer or degraded accuracy for everything, not just
+    // the title-matching. Past this many songs, "play <title>" by voice is
+    // disabled rather than risk the whole recognizer - browsing/search in
+    // the app still works normally regardless of library size.
+    private val MAX_VOICE_TITLES = 400
+
     private fun startRecognizer(model: org.vosk.Model) {
         val wake = Prefs.wakeWord(this)
         val aliases = Prefs.wakeAliases(this)
         val wakeList = CommandParser.wakePhrases(wake, aliases).joinToString(" / ")
+        val allTitleKeys = MusicLibrary.all().map { TitleNormalizer.normalize(it.title) }
+        val titleKeys = if (allTitleKeys.size > MAX_VOICE_TITLES) {
+            log("Library has ${allTitleKeys.size} songs - \"play <song name>\" by voice is " +
+                "off above $MAX_VOICE_TITLES songs to keep recognition reliable. Everything " +
+                "else (play/pause/next/skip/trim/rating, and browsing/search in the app) still works.")
+            emptyList()
+        } else allTitleKeys
         log("Model ready - listening for: $wakeList")
-        val titleKeys = MusicLibrary.all().map { TitleNormalizer.normalize(it.title) }
-        val grammar = org.json.JSONArray(CommandParser.grammarPhrases(titleKeys, wake, aliases)).toString()
-        val recognizer = Recognizer(model, 16000.0f, grammar)
-        speechService?.stop()
-        speechService?.shutdown()
-        speechService = SpeechService(recognizer, 16000.0f)
-        speechService?.startListening(this)
-        this.loadedModel = model
+        // Building the recognizer's decoding graph from the grammar is
+        // real native work, not free even at a capped phrase count - keep
+        // it off the main thread so a slow build can never cause an ANR.
+        Thread {
+            val grammar = org.json.JSONArray(CommandParser.grammarPhrases(titleKeys, wake, aliases)).toString()
+            val recognizer = Recognizer(model, 16000.0f, grammar)
+            speechService?.stop()
+            speechService?.shutdown()
+            speechService = SpeechService(recognizer, 16000.0f)
+            speechService?.startListening(this)
+            loadedModel = model
+        }.start()
     }
 
     private var loadedModel: org.vosk.Model? = null
@@ -182,7 +264,9 @@ class VoiceService : Service(), RecognitionListener {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        persistResumeState()
         instance = null
+        MusicLibrary.removeListener(libraryListener)
         progressHandler.removeCallbacksAndMessages(null)
         speechService?.stop()
         speechService?.shutdown()
@@ -268,14 +352,19 @@ class VoiceService : Service(), RecognitionListener {
             setOnCompletionListener { next() }
         }
         // Pick up whatever trim points were saved for THIS song previously
-        // (same idea as the Windows app storing skip_intro/trim_end per
+        // (same idea as the Windows app storing trim_start/trim_end per
         // song) - a fresh MediaPlayer always starts at 0, so re-apply the
         // saved front-trim seek here rather than only when a new "trim"
-        // voice command / GUI change happens.
+        // voice command / GUI change happens. Matches Windows'
+        // _effective_start(): whichever of the global SKIP setting and
+        // this song's own TRIM front-cut is LARGER wins, so a global skip
+        // never gets silently ignored just because a song also has its
+        // own trim point, and vice versa.
         val uriKey = song.uri.toString()
         val savedFront = SongMetadataStore.trimFront(this, uriKey)
         val savedEnd = SongMetadataStore.trimEnd(this, uriKey)
-        if (savedFront > 0) mediaPlayer?.seekTo(savedFront * 1000)
+        val startAt = maxOf(skipSeconds, savedFront)
+        if (startAt > 0) mediaPlayer?.seekTo(startAt * 1000)
         trimEndSeconds = savedEnd
         trimCallback?.invoke(savedFront, savedEnd)
         ratingCallback?.invoke(SongMetadataStore.rating(this, uriKey))
@@ -361,9 +450,14 @@ class VoiceService : Service(), RecognitionListener {
     fun setTrim(frontSeconds: Int, endSeconds: Int) {
         val mp = mediaPlayer ?: return
         val uriKey = currentUriKey() ?: return
-        if (frontSeconds > 0) mp.seekTo(frontSeconds * 1000)
-        trimEndSeconds = endSeconds
         SongMetadataStore.setTrim(this, uriKey, frontSeconds, endSeconds)
+        // Matches Windows' set_trim_start(): seek to whichever of the
+        // global SKIP setting and this new trim front-cut is LARGER, not
+        // just the raw trim value - a global skip shouldn't get silently
+        // undone by setting a smaller per-song trim point.
+        val startAt = maxOf(skipSeconds, frontSeconds)
+        if (startAt > 0) mp.seekTo(startAt * 1000)
+        trimEndSeconds = endSeconds
         trimCallback?.invoke(frontSeconds, endSeconds)
     }
 
@@ -374,10 +468,24 @@ class VoiceService : Service(), RecognitionListener {
 
     private fun status() = speak(currentTitle().ifBlank { "nothing loaded" })
 
-    private fun skip(seconds: Int) {
+    /** SKIP: sets the GLOBAL live start-position (seconds) applied to
+     * EVERY song, current and future - matches Windows' Player.
+     * set_skip_seconds() exactly, called by both the voice "skip" command
+     * and the Settings skip control, same as there. If a song is
+     * currently loaded, it's immediately re-seeked to the new effective
+     * start (paused songs stay paused, just cued further in). */
+    fun setSkipSeconds(seconds: Int) {
+        skipSeconds = seconds.coerceIn(0, 60)
+        Prefs.setSkipSeconds(this, skipSeconds)
         val mp = mediaPlayer ?: return
-        mp.seekTo((mp.currentPosition + seconds * 1000).coerceIn(0, mp.duration))
+        val uriKey = currentUriKey() ?: return
+        val wasPlaying = mp.isPlaying
+        val startAt = maxOf(skipSeconds, SongMetadataStore.trimFront(this, uriKey))
+        mp.seekTo(startAt * 1000)
+        if (!wasPlaying) mp.pause()
     }
+
+    fun currentSkipSeconds(): Int = skipSeconds
 
     private fun playSongByTitleKey(titleKey: String) {
         val idx = MusicLibrary.all().indexOfFirst { TitleNormalizer.normalize(it.title) == titleKey }
@@ -388,16 +496,26 @@ class VoiceService : Service(), RecognitionListener {
 
     // -- org.vosk.android.RecognitionListener callbacks --
 
+    // Debounce for the partial-match duck below: how many consecutive
+    // partial-result callbacks in a row have matched a wake phrase.
+    // Ducking on a single partial match (the old behavior here) meant one
+    // brief mis-hearing - a stray "john"/"sam"-ish sound in song lyrics or
+    // background noise - was enough to dim the volume with no real
+    // command following, which read as "volume just dims for no reason".
+    // Matches the Windows app's identical fix (PARTIAL_WAKE_DEBOUNCE=2 in
+    // voice_control.py).
+    private var partialWakeStreak = 0
+    private val PARTIAL_WAKE_DEBOUNCE = 2
+
     override fun onPartialResult(hypothesis: String?) {
-        // While the mic is picking up a partial match on the wake word,
-        // duck now rather than waiting for the whole phrase to finish -
-        // same idea as the Windows app's begin_listening() on a partial.
         val partial = try { JSONObject(hypothesis ?: "").optString("partial", "") } catch (e: Exception) { "" }
-        if (partial.isNotBlank()) {
-            val wake = Prefs.wakeWord(this); val aliases = Prefs.wakeAliases(this)
-            if (CommandParser.wakePhrases(wake, aliases).any { partial.startsWith(it) }) {
-                requestDuckFocus()
-            }
+        val wake = Prefs.wakeWord(this); val aliases = Prefs.wakeAliases(this)
+        val matches = partial.isNotBlank() && CommandParser.wakePhrases(wake, aliases).any { partial.startsWith(it) }
+        if (matches) {
+            partialWakeStreak++
+            if (partialWakeStreak >= PARTIAL_WAKE_DEBOUNCE) requestDuckFocus()
+        } else {
+            partialWakeStreak = 0
         }
     }
 
@@ -407,6 +525,7 @@ class VoiceService : Service(), RecognitionListener {
     override fun onTimeout() { abandonDuckFocus() }
 
     private fun handleHypothesis(hypothesis: String?) {
+        partialWakeStreak = 0
         if (hypothesis.isNullOrBlank()) return
         val text = try { JSONObject(hypothesis).optString("text", "") } catch (e: Exception) { "" }
         abandonDuckFocus()  // whatever happens next, volume goes back to normal first
@@ -432,7 +551,15 @@ class VoiceService : Service(), RecognitionListener {
                 setRating(cmd.value)
                 speak("rated ${cmd.value}, saved")
             }
-            is CommandParser.Command.Skip -> skip(cmd.seconds)
+            is CommandParser.Command.Skip -> {
+                setSkipSeconds(cmd.seconds)
+                // Windows only plays a short ack chime here (no spoken
+                // confirmation) - Android has no tone-based feedback sound
+                // at all though (everything here is TTS-based), so saying
+                // it briefly is the closest equivalent rather than giving
+                // zero feedback for a global setting change.
+                speak("skip set to ${cmd.seconds} seconds")
+            }
             is CommandParser.Command.Trim -> {
                 setTrim(cmd.frontSeconds, cmd.endSeconds)
                 speak("trim set, ${cmd.frontSeconds} seconds from the start, ${cmd.endSeconds} from the end, saved")

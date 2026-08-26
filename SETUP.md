@@ -48,7 +48,19 @@ anything to the project yourself.
 - **Settings screen** (tap the gear icon): change the wake word/aliases,
   **add specific music folders** via Android's real folder picker (for
   an SD card or a folder MediaStore doesn't pick up), rescan the
-  library, switch Dark/Plain theme.
+  library, switch Dark/Plain theme, **auto-open on boot**.
+- **Auto-open when the car/tablet turns on** (off by default - turn it
+  on in Settings): launches the app, resumes the last song from exactly
+  where it left off, and starts playing automatically - no taps needed.
+  Works even if the screen stays locked/off; audio starts regardless.
+  Saved periodically during playback (every ~3s), not just on a clean
+  exit, since a car's ignition turning off is an abrupt stop with no
+  chance to save on the way out otherwise. Some tablets (especially
+  budget/car-head-unit Android boxes) additionally require enabling
+  "autostart" or "background activity" for this app in the device's own
+  system settings - that's a manufacturer restriction this app can't
+  bypass, so if auto-open doesn't work after enabling it here, check
+  there next.
 - **Volume is now stable**: your chosen volume (the slider on the main
   screen) is saved and is the ONLY baseline used everywhere - ducking
   for a voice command or a spoken confirmation always restores to
@@ -60,11 +72,23 @@ anything to the project yourself.
   keeps working with the screen off) for wake words "john" and "sam"
   (each also works with "hey" in front - "hey john", "hey sam").
 - Commands: "play", "pause", "next", "previous", "status", "play <song
-  name>", "skip 30 seconds" / "skip 1 minute", "trim forty thirty" (jump
-  40s in, stop 30s before the end - numbers are multiples of ten:
+  name>", "skip 30 seconds" / "skip 1 minute" (a GLOBAL setting - applies
+  to every song, current and future, not just a one-off jump; also
+  changeable from Settings), "trim forty thirty" (per-song front/end cut
+  points, saved for that song - numbers are multiples of ten:
   zero/ten/twenty/thirty/forty/fifty/sixty), and a number 1-5 for rating.
+- If both a global skip AND a song's own trim start are set, whichever
+  is LARGER wins for where that song starts - matches the Windows app
+  exactly, so a global skip never gets silently overridden by a smaller
+  per-song trim point.
+- Ducking (for a voice command or a spoken confirmation) requires the
+  wake word to be heard consistently for a moment, not just a single
+  stray-sounding blip - fixes volume dipping for no reason on a false
+  alarm (e.g. something in a song's lyrics sounding vaguely like "john").
 - Playlist wraps around at the end instead of stopping.
 - Speaks a short confirmation out loud after each command.
+- Scanning a large/multi-folder library shows live progress (files
+  checked, songs found so far) in Settings instead of looking frozen.
 
 ## Two things worth knowing about rating/trim on this build
 - **Rating and trim are now saved and persist** across restarts - by

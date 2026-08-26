@@ -48,10 +48,22 @@ class SongAdapter(
             holder.itemView.setBackgroundColor(
                 holder.itemView.context.getColor(R.color.now_playing_row)
             )
+            holder.title.setTextColor(holder.itemView.context.getColor(R.color.now_playing_text))
         } else {
             holder.itemView.setBackgroundColor(Color.TRANSPARENT)
+            // Views get recycled, so a row that WAS the playing one and
+            // just got reused for a different song must have its title
+            // color reset - otherwise the red would "stick" to whichever
+            // recycled view happened to hold it, on a random-looking row.
+            holder.title.setTextColor(defaultTitleColor(holder.itemView.context))
         }
         holder.itemView.setOnClickListener { onClick(position) }
+    }
+
+    private fun defaultTitleColor(context: android.content.Context): Int {
+        val typedValue = android.util.TypedValue()
+        context.theme.resolveAttribute(android.R.attr.textColorPrimary, typedValue, true)
+        return if (typedValue.resourceId != 0) context.getColor(typedValue.resourceId) else typedValue.data
     }
 
     override fun getItemCount(): Int = songs.size

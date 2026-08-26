@@ -82,14 +82,55 @@ class SettingsActivity : AppCompatActivity() {
             AppCompatDelegate.setDefaultNightMode(mode)
         }
 
+        // SKIP: global, live setting - matches the Windows app's Settings
+        // skip control exactly (a discrete 0/5/10/.../60 choice there;
+        // a draggable SeekBar snapped to the same 5-second steps here).
+        val skipSeekBar = findViewById<android.widget.SeekBar>(R.id.skipSecondsSeekBar)
+        val skipLabel = findViewById<TextView>(R.id.skipSecondsLabel)
+        val initialSkip = Prefs.skipSeconds(this)
+        skipSeekBar.progress = initialSkip
+        skipLabel.text = "${initialSkip}s"
+        skipSeekBar.setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: android.widget.SeekBar?, progress: Int, fromUser: Boolean) {
+                val snapped = (progress / 5) * 5
+                skipLabel.text = "${snapped}s"
+            }
+            override fun onStartTrackingTouch(sb: android.widget.SeekBar?) {}
+            override fun onStopTrackingTouch(sb: android.widget.SeekBar?) {
+                val snapped = (sb?.progress ?: 0) / 5 * 5
+                sb?.progress = snapped
+                VoiceService.instance?.setSkipSeconds(snapped) ?: Prefs.setSkipSeconds(this@SettingsActivity, snapped)
+            }
+        })
+
+        val autoStartCheckbox = findViewById<android.widget.CheckBox>(R.id.autoStartCheckbox)
+        autoStartCheckbox.isChecked = Prefs.autoStartOnBoot(this)
+        autoStartCheckbox.setOnCheckedChangeListener { _, checked ->
+            Prefs.setAutoStartOnBoot(this, checked)
+        }
+
         renderFolderList()
     }
 
     private fun rescanInBackground() {
-        Toast.makeText(this, "Rescanning library...", Toast.LENGTH_SHORT).show()
+        val statusText = findViewById<TextView>(R.id.scanStatusText)
+        val rescanButton = findViewById<Button>(R.id.rescanButton)
+        rescanButton.isEnabled = false
+        rescanButton.text = "Scanning..."
+        statusText.text = "Starting scan..."
         Thread {
-            MusicLibrary.rescan(this)
-            runOnUiThread { Toast.makeText(this, "Found ${MusicLibrary.all().size} song(s)", Toast.LENGTH_SHORT).show() }
+            MusicLibrary.rescan(this) { seen, added ->
+                // Called from this background thread deliberately (matches
+                // Windows' progress_cb) - hop to main here since this
+                // touches a TextView, unlike rescan()'s own listener
+                // notifications which already hop for you.
+                runOnUiThread { statusText.text = "Scanning... $seen files checked, $added found so far" }
+            }
+            runOnUiThread {
+                rescanButton.isEnabled = true
+                rescanButton.text = "Rescan Library"
+                statusText.text = "Found ${MusicLibrary.all().size} song(s)."
+            }
         }.start()
     }
 

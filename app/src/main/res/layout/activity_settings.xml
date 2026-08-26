@@ -96,6 +96,14 @@
             android:layout_marginTop="4dp"
             android:text="Rescan Library" />
 
+        <TextView
+            android:id="@+id/scanStatusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textSize="12sp"
+            android:textColor="?android:attr/textColorSecondary" />
+
         <View
             android:layout_width="match_parent"
             android:layout_height="1dp"
@@ -125,6 +133,67 @@
                 android:layout_marginStart="24dp"
                 android:text="Plain / Light" />
         </RadioGroup>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginTop="20dp"
+            android:background="?android:attr/listDivider" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="Skip (start every song this far in)"
+            android:textStyle="bold" />
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Applies to every song, current and future - not the same as a song's own trim points below. Same as the voice command &quot;skip 30 seconds&quot;."
+            android:textSize="12sp"
+            android:textColor="?android:attr/textColorSecondary" />
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+            <SeekBar
+                android:id="@+id/skipSecondsSeekBar"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:max="60" />
+            <TextView
+                android:id="@+id/skipSecondsLabel"
+                android:layout_width="56dp"
+                android:layout_height="wrap_content"
+                android:gravity="end"
+                android:text="0s" />
+        </LinearLayout>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginTop="20dp"
+            android:background="?android:attr/listDivider" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="Startup"
+            android:textStyle="bold" />
+        <CheckBox
+            android:id="@+id/autoStartCheckbox"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Auto-open when the car/tablet turns on" />
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Resumes playback automatically from wherever it left off - no taps needed. On some tablets (especially budget/car-head-unit Android boxes), you may also need to enable &quot;autostart&quot; or &quot;background activity&quot; for this app in the device's own system settings - that's a manufacturer restriction this app can't bypass on its own."
+            android:textSize="12sp"
+            android:textColor="?android:attr/textColorSecondary" />
 
         <View
             android:layout_width="match_parent"
