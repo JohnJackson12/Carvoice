@@ -23,8 +23,13 @@ class SettingsActivity : AppCompatActivity() {
         androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree()
     ) { uri: Uri? ->
         if (uri != null) {
+            // WRITE permission too, not just READ - needed so a song from
+            // this folder can actually be deleted later (the long-press
+            // "Delete" menu / the now-playing panel's delete button both
+            // need this; without it, deleting anything from a
+            // manually-added folder would fail).
             contentResolver.takePersistableUriPermission(
-                uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
+                uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             )
             Prefs.addFolderUri(this, uri.toString())
             renderFolderList()
@@ -107,6 +112,13 @@ class SettingsActivity : AppCompatActivity() {
         autoStartCheckbox.isChecked = Prefs.autoStartOnBoot(this)
         autoStartCheckbox.setOnCheckedChangeListener { _, checked ->
             Prefs.setAutoStartOnBoot(this, checked)
+        }
+
+        val crashLogText = findViewById<TextView>(R.id.crashLogText)
+        crashLogText.text = CrashLog.lastEntry(this) ?: "None recorded."
+        findViewById<Button>(R.id.clearCrashLogButton).setOnClickListener {
+            CrashLog.clear(this)
+            crashLogText.text = "None recorded."
         }
 
         renderFolderList()

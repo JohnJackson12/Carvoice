@@ -2,12 +2,14 @@ package com.carvoice.app
 
 import android.graphics.Color
 import android.view.LayoutInflater
+import android.view.View
 import android.view.ViewGroup
 import androidx.recyclerview.widget.RecyclerView
 
 class SongAdapter(
     private var songs: List<Song>,
     private val onClick: (Int) -> Unit,
+    private val onLongClick: (Int) -> Unit,
 ) : RecyclerView.Adapter<SongAdapter.ViewHolder>() {
 
     /** Index (into `songs`, the currently-displayed/filtered list) of the
@@ -43,7 +45,18 @@ class SongAdapter(
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         val song = songs[position]
         holder.title.text = song.title
-        holder.artist.text = song.artist
+        // Folder-scanned songs (the common case for this app, since
+        // MediaStore's whole-device library is off by default) have no
+        // artist metadata at all - showing an empty second line on every
+        // single row was the actual cause of the "extra line between
+        // songs" look. Collapse it away entirely when there's nothing to
+        // show instead of reserving blank space for it.
+        if (song.artist.isBlank()) {
+            holder.artist.visibility = View.GONE
+        } else {
+            holder.artist.visibility = View.VISIBLE
+            holder.artist.text = song.artist
+        }
         if (position == playingIndex) {
             holder.itemView.setBackgroundColor(
                 holder.itemView.context.getColor(R.color.now_playing_row)
@@ -58,6 +71,7 @@ class SongAdapter(
             holder.title.setTextColor(defaultTitleColor(holder.itemView.context))
         }
         holder.itemView.setOnClickListener { onClick(position) }
+        holder.itemView.setOnLongClickListener { onLongClick(position); true }
     }
 
     private fun defaultTitleColor(context: android.content.Context): Int {

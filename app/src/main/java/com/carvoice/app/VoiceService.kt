@@ -160,6 +160,7 @@ class VoiceService : Service(), RecognitionListener {
 
     override fun onCreate() {
         super.onCreate()
+        CrashLog.install(this)
         instance = this
         audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
         baseVolume = Prefs.playbackVolume(this)
@@ -228,14 +229,22 @@ class VoiceService : Service(), RecognitionListener {
         // Building the recognizer's decoding graph from the grammar is
         // real native work, not free even at a capped phrase count - keep
         // it off the main thread so a slow build can never cause an ANR.
+        // Also genuinely uncaught before this fix - any failure here
+        // (a malformed grammar, a native-layer issue) killed the whole
+        // app with zero trace, on a thread with no default handling.
         Thread {
-            val grammar = org.json.JSONArray(CommandParser.grammarPhrases(titleKeys, wake, aliases)).toString()
-            val recognizer = Recognizer(model, 16000.0f, grammar)
-            speechService?.stop()
-            speechService?.shutdown()
-            speechService = SpeechService(recognizer, 16000.0f)
-            speechService?.startListening(this)
-            loadedModel = model
+            try {
+                val grammar = org.json.JSONArray(CommandParser.grammarPhrases(titleKeys, wake, aliases)).toString()
+                val recognizer = Recognizer(model, 16000.0f, grammar)
+                speechService?.stop()
+                speechService?.shutdown()
+                speechService = SpeechService(recognizer, 16000.0f)
+                speechService?.startListening(this)
+                loadedModel = model
+            } catch (e: Exception) {
+                CrashLog.record(this, "startRecognizer failed: ${e}")
+                log("[!] Couldn't start the recognizer: ${e.message}")
+            }
         }.start()
     }
 

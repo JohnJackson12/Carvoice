@@ -205,6 +205,34 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="20dp"
+            android:text="Last error/crash"
+            android:textStyle="bold" />
+        <TextView
+            android:id="@+id/crashLogText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textSize="11sp"
+            android:fontFamily="monospace"
+            android:textColor="?android:attr/textColorSecondary"
+            android:text="None recorded." />
+        <Button
+            android:id="@+id/clearCrashLogButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Clear" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginTop="20dp"
+            android:background="?android:attr/listDivider" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
             android:textSize="12sp"
             android:textColor="?android:attr/textColorSecondary"
             android:text="Voice commands: play / pause / next / previous / status / play &lt;song name&gt; / skip 30 seconds (current song only, once) / skip all songs 30 seconds (global, same as the Skip setting above) / trim forty thirty / a number 1-5 for rating." />

@@ -97,6 +97,21 @@ anything to the project yourself.
 - Speaks a short confirmation out loud after each command.
 - Scanning a large/multi-folder library shows live progress (files
   checked, songs found so far) in Settings instead of looking frozen.
+- **Long-press any song** for Play / Song Info / Delete. A trash-icon
+  button in the now-playing panel deletes whatever's currently loaded.
+  Deleting actually removes the file from your device (not just from
+  this app's list) - Android requires a one-tap OS confirmation for
+  files this app didn't create itself, which is a platform requirement,
+  not something this app is choosing to add.
+- If Settings shows something under "Last error/crash": something was
+  caught and handled without crashing the app, but it's worth telling
+  me about if you see one - copy the text there and send it over.
+
+## If you added folders BEFORE this update
+Folders added via "Add Music Folder" before this version only had read
+permission - deleting a song from one of those folders will fail. Go to
+Settings, remove and re-add any folders you added previously so they
+pick up write permission too. Folders added from now on don't need this.
 
 ## Two things worth knowing about rating/trim on this build
 - **Rating and trim are now saved and persist** across restarts - by

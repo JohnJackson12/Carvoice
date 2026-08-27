@@ -47,6 +47,18 @@ object MusicLibrary {
         listeners.remove(l)
     }
 
+    /** Called right after a song's underlying file was actually deleted
+     * from storage (see MainActivity's delete flow) - updates the
+     * in-memory list and the on-disk cache immediately so it disappears
+     * from the song list right away, rather than waiting for the next
+     * full rescan to notice it's gone. */
+    fun removeSong(context: Context, uri: Uri) {
+        val uriKey = uri.toString()
+        songs.removeAll { it.uri.toString() == uriKey }
+        saveCache(context)
+        mainHandler.post { listeners.forEach { it() } }
+    }
+
     /** Instantly populates from whatever was found last time, without
      * touching disk/SAF at all - call this first at startup so something
      * is usually already playable/browsable while rescan() (slow, real
@@ -113,34 +125,50 @@ object MusicLibrary {
      * on, same as the final listener notification's thread-hop applies
      * only to that, not to this. */
     fun rescan(context: Context, progressCb: ((seen: Int, added: Int) -> Unit)? = null) {
-        val result = mutableListOf<Song>()
-        if (Prefs.useWholeDeviceLibrary(context)) {
-            result.addAll(scanMediaStore(context))
-        }
-        var seen = 0
-        for (uriString in Prefs.folderUris(context)) {
-            try {
-                result.addAll(scanFolderTree(context, Uri.parse(uriString)) { s ->
-                    seen = s
-                    progressCb?.invoke(seen, result.size)
-                })
-            } catch (e: Exception) {
-                // A folder can vanish (SD card removed, permission revoked) -
-                // skip it rather than let one bad folder break the whole scan.
+        try {
+            val result = mutableListOf<Song>()
+            if (Prefs.useWholeDeviceLibrary(context)) {
+                try {
+                    result.addAll(scanMediaStore(context))
+                } catch (e: Exception) {
+                    // A revoked READ_MEDIA_AUDIO permission (Android can
+                    // auto-revoke unused permissions after months of
+                    // inactivity) used to throw here UNCAUGHT - on a
+                    // background thread, that kills the entire app process
+                    // with no trace. Log it via CrashLog instead and just
+                    // skip the whole-device part of the scan.
+                    CrashLog.record(context, "scanMediaStore failed: ${e}")
+                }
             }
+            var seen = 0
+            for (uriString in Prefs.folderUris(context)) {
+                try {
+                    result.addAll(scanFolderTree(context, Uri.parse(uriString)) { s ->
+                        seen = s
+                        progressCb?.invoke(seen, result.size)
+                    })
+                } catch (e: Exception) {
+                    // A folder can vanish (SD card removed, permission revoked) -
+                    // skip it rather than let one bad folder break the whole scan.
+                }
+            }
+            // De-dupe by URI (the same song could technically show up via both
+            // MediaStore and a manually-added folder pointing at the same file).
+            val deduped = result.distinctBy { it.uri.toString() }.sortedBy { it.title.lowercase() }
+            songs.clear()
+            songs.addAll(deduped)
+            saveCache(context)
+            progressCb?.invoke(seen, deduped.size)
+            // Listeners often touch a MediaPlayer or a View - always hand
+            // that off to the main thread, regardless of which thread called
+            // rescan() (Settings' button already uses a background thread;
+            // VoiceService's startup rescan does too).
+            mainHandler.post { listeners.forEach { it() } }
+        } catch (e: Exception) {
+            // Last-resort net for this whole function - whatever wasn't
+            // already caught above still must never take the app down.
+            CrashLog.record(context, "MusicLibrary.rescan failed: ${e}")
         }
-        // De-dupe by URI (the same song could technically show up via both
-        // MediaStore and a manually-added folder pointing at the same file).
-        val deduped = result.distinctBy { it.uri.toString() }.sortedBy { it.title.lowercase() }
-        songs.clear()
-        songs.addAll(deduped)
-        saveCache(context)
-        progressCb?.invoke(seen, deduped.size)
-        // Listeners often touch a MediaPlayer or a View - always hand
-        // that off to the main thread, regardless of which thread called
-        // rescan() (Settings' button already uses a background thread;
-        // VoiceService's startup rescan does too).
-        mainHandler.post { listeners.forEach { it() } }
     }
 
     private fun scanMediaStore(context: Context): List<Song> {
