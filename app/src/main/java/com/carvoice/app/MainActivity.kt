@@ -53,6 +53,15 @@ class MainActivity : AppCompatActivity() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 perms.add(Manifest.permission.POST_NOTIFICATIONS)
             }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                // For automatic Bluetooth mic routing in Settings - see
+                // VoiceService.setUpAutomaticMicRouting(). Not strictly
+                // required by AudioManager's own SCO methods on stock
+                // Android, but requested defensively for OEM builds that
+                // gate it, and to avoid a SecurityException surprising
+                // that code path on those devices.
+                perms.add(Manifest.permission.BLUETOOTH_CONNECT)
+            }
             return perms.toTypedArray()
         }
 

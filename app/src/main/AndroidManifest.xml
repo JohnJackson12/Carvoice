@@ -6,6 +6,12 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Not strictly required by AudioManager's Bluetooth-SCO methods on
+         stock Android, but some OEM builds gate related audio-routing
+         behind it - requested defensively so automatic Bluetooth mic
+         routing has the best chance of working across devices. Wired/USB
+         mic auto-routing doesn't need this at all. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <!-- Reading the user's own music library (API 33+ split media permissions) -->
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
     <!-- Pre-API-33 fallback for reading files -->

@@ -72,11 +72,19 @@ anything to the project yourself.
   keeps working with the screen off) for wake words "john" and "sam"
   (each also works with "hey" in front - "hey john", "hey sam").
 - Commands: "play", "pause", "next", "previous", "status", "play <song
-  name>", "skip 30 seconds" / "skip 1 minute" (a GLOBAL setting - applies
-  to every song, current and future, not just a one-off jump; also
-  changeable from Settings), "trim forty thirty" (per-song front/end cut
-  points, saved for that song - numbers are multiples of ten:
-  zero/ten/twenty/thirty/forty/fifty/sixty), and a number 1-5 for rating.
+  name>", "skip 30 seconds" / "skip 1 minute" (CURRENT SONG ONLY, a
+  one-time jump - not saved anywhere, doesn't affect other songs), "skip
+  all songs 30 seconds" (the GLOBAL setting - applies to every song,
+  current and future; same as the Skip control in Settings), "trim forty
+  thirty" (per-song front/end cut points, saved for that song - numbers
+  are multiples of ten: zero/ten/twenty/thirty/forty/fifty/sixty), and a
+  number 1-5 for rating.
+- Mic input switches automatically if you connect a different
+  microphone (Bluetooth, wired, USB) - no manual device picker, same as
+  the Windows app not having one. Bluetooth mic routing specifically can
+  vary by device/headset - if it doesn't route through Bluetooth
+  automatically, that's the one part of this worth testing on your
+  actual hardware, since it can't be fully verified without it.
 - If both a global skip AND a song's own trim start are set, whichever
   is LARGER wins for where that song starts - matches the Windows app
   exactly, so a global skip never gets silently overridden by a smaller

@@ -30,7 +30,14 @@ object MusicLibrary {
     private const val CACHE_FILE = "car_voice_library_cache"
     private const val CACHE_KEY = "songs_json"
 
-    fun all(): List<Song> = songs.toList()
+    // ALWAYS returns alphabetical-by-title order, defensively re-sorted
+    // here regardless of how `songs` was populated - not just relying on
+    // every call site (rescan, loadCache) to have sorted it correctly
+    // beforehand. This is what guarantees the list can never appear to
+    // "change sort order" between a cache load and a real rescan, or
+    // after some future code path adds to `songs` without remembering to
+    // sort. Cheap enough to do on every call for realistic library sizes.
+    fun all(): List<Song> = songs.sortedBy { it.title.lowercase() }
 
     fun addListener(l: () -> Unit) {
         listeners.add(l)
@@ -57,7 +64,12 @@ object MusicLibrary {
                 loaded.add(Song(Uri.parse(obj.getString("uri")), obj.getString("title"), obj.getString("artist")))
             }
             songs.clear()
-            songs.addAll(loaded)
+            // Sorted here too (not just trusting the cache file was saved
+            // in order) - a cache written by an older build with different
+            // scan/sort logic, or any other source of a stale ordering,
+            // gets normalized immediately on load rather than showing a
+            // wrong order until the next rescan corrects it.
+            songs.addAll(loaded.sortedBy { it.title.lowercase() })
         } catch (e: Exception) {
             // A corrupt or missing cache just means "start empty until the
             // real rescan finishes" - not worth crashing over.

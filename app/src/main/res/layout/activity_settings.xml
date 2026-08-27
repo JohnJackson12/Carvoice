@@ -149,7 +149,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Applies to every song, current and future - not the same as a song's own trim points below. Same as the voice command &quot;skip 30 seconds&quot;."
+            android:text="Applies to every song, current and future - not the same as a song's own trim points below, and not the same as saying &quot;skip 30 seconds&quot; alone (that only jumps the CURRENT song, once). Same as the voice command &quot;skip all songs 30 seconds&quot;."
             android:textSize="12sp"
             android:textColor="?android:attr/textColorSecondary" />
         <LinearLayout
@@ -207,7 +207,7 @@
             android:layout_marginTop="20dp"
             android:textSize="12sp"
             android:textColor="?android:attr/textColorSecondary"
-            android:text="Voice commands: play / pause / next / previous / status / play &lt;song name&gt; / skip 30 seconds / skip 1 minute / trim forty thirty / a number 1-5 for rating." />
+            android:text="Voice commands: play / pause / next / previous / status / play &lt;song name&gt; / skip 30 seconds (current song only, once) / skip all songs 30 seconds (global, same as the Skip setting above) / trim forty thirty / a number 1-5 for rating." />
 
     </LinearLayout>
 </ScrollView>

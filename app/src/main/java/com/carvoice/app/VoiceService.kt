@@ -6,6 +6,8 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
 import android.media.AudioAttributes
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.MediaPlayer
@@ -131,6 +133,18 @@ class VoiceService : Service(), RecognitionListener {
         }
         currentIndex = savedIndex
         loadCurrentTrack(announce = false)
+        // loadCurrentTrack() can fall back to a DIFFERENT song if the
+        // saved one failed to load (stale file, revoked permission) - in
+        // that case currentIndex no longer points at savedIndex, and the
+        // saved position/trim belong to a song we're no longer loading,
+        // so only apply the resume-seek if we actually got the song we
+        // meant to resume. The fallback song just plays from its own
+        // normal effective-start instead, which loadCurrentTrack() already
+        // set up on its own.
+        if (currentIndex != savedIndex || mediaPlayer == null) {
+            if (mediaPlayer != null) play()  // fallback song loaded fine - still auto-play it
+            return
+        }
         val uriKey = list[savedIndex].uri.toString()
         val effectiveStartMs = maxOf(skipSeconds, SongMetadataStore.trimFront(this, uriKey)) * 1000
         val resumeAtMs = maxOf(Prefs.lastPositionMs(this), effectiveStartMs)
@@ -150,6 +164,7 @@ class VoiceService : Service(), RecognitionListener {
         audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
         baseVolume = Prefs.playbackVolume(this)
         skipSeconds = Prefs.skipSeconds(this)
+        setUpAutomaticMicRouting()
 
         createNotificationChannel()
         startForeground(NOTIF_ID, buildNotification("Starting..."))
@@ -266,6 +281,7 @@ class VoiceService : Service(), RecognitionListener {
     override fun onDestroy() {
         persistResumeState()
         instance = null
+        tearDownAutomaticMicRouting()
         MusicLibrary.removeListener(libraryListener)
         progressHandler.removeCallbacksAndMessages(null)
         speechService?.stop()
@@ -277,6 +293,87 @@ class VoiceService : Service(), RecognitionListener {
         tts?.stop()
         tts?.shutdown()
         super.onDestroy()
+    }
+
+    // -- automatic mic routing - no manual device picker, matches the
+    //    Windows app NOT having one either; unlike desktop though, Android
+    //    doesn't let an app "pick" an input device the way PortAudio does -
+    //    the OS decides which mic is "current" based on what's connected,
+    //    and the fix here is making sure a fresh AudioRecord gets created
+    //    (which then follows the OS's current choice) whenever that
+    //    changes, rather than the recognizer staying stuck on whatever mic
+    //    was active when it first started listening. ---------------------
+
+    private var scoActive = false
+    private var micRoutingRestartPending = false
+
+    private val audioDeviceCallback = object : AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
+            handleInputDeviceChange(addedDevices)
+        }
+        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
+            handleInputDeviceChange(removedDevices)
+        }
+    }
+
+    private fun handleInputDeviceChange(devices: Array<out AudioDeviceInfo>) {
+        val inputDevices = devices.filter { it.isSource }
+        if (inputDevices.isEmpty()) return
+        log("Mic device change detected (${inputDevices.joinToString { it.productName?.toString() ?: it.type.toString() }}) - switching to it.")
+        val hasBluetoothMic = inputDevices.any {
+            it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+        }
+        if (hasBluetoothMic) startBluetoothScoIfAvailable()
+        // A single physical plug/unplug event can fire this callback more
+        // than once in quick succession - debounce so a Bluetooth
+        // headset's mic connecting doesn't restart the recognizer 3 times
+        // in one second.
+        if (!micRoutingRestartPending) {
+            micRoutingRestartPending = true
+            Handler(Looper.getMainLooper()).postDelayed({
+                micRoutingRestartPending = false
+                refreshRecognizer()
+            }, 1200)
+        }
+    }
+
+    private fun startBluetoothScoIfAvailable() {
+        try {
+            if (!scoActive && audioManager.isBluetoothScoAvailableOffCall) {
+                audioManager.startBluetoothSco()
+                audioManager.isBluetoothScoOn = true
+                scoActive = true
+                log("Bluetooth mic available - routing audio input through it.")
+            }
+        } catch (e: SecurityException) {
+            // Some OEMs gate this behind a Bluetooth permission this app
+            // doesn't request (it's not required on stock Android for
+            // AudioManager's SCO methods specifically) - if that happens,
+            // the built-in/wired mic keeps working normally regardless;
+            // only the Bluetooth-specific auto-routing is skipped.
+            log("[!] Couldn't start Bluetooth mic routing (permission): ${e.message}")
+        }
+    }
+
+    private fun setUpAutomaticMicRouting() {
+        audioManager.registerAudioDeviceCallback(audioDeviceCallback, Handler(Looper.getMainLooper()))
+        // Cover the case where a Bluetooth/wired/USB mic is ALREADY
+        // connected before the service even starts (e.g. it was paired
+        // and left connected from a previous drive) - onAudioDevicesAdded
+        // only fires for devices connecting AFTER registration.
+        val alreadyConnected = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS)
+        if (alreadyConnected.any { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO }) {
+            startBluetoothScoIfAvailable()
+        }
+    }
+
+    private fun tearDownAutomaticMicRouting() {
+        audioManager.unregisterAudioDeviceCallback(audioDeviceCallback)
+        if (scoActive) {
+            audioManager.stopBluetoothSco()
+            audioManager.isBluetoothScoOn = false
+            scoActive = false
+        }
     }
 
     // -- audio focus / ducking - the actual volume-stability fix --------------
@@ -336,7 +433,7 @@ class VoiceService : Service(), RecognitionListener {
 
     // -- playback ---------------------------------------------------------------
 
-    private fun loadCurrentTrack(announce: Boolean) {
+    private fun loadCurrentTrack(announce: Boolean, fallbackDepth: Int = 0) {
         trimEndSeconds = 0
         val list = MusicLibrary.all()
         if (currentIndex !in list.indices) {
@@ -345,11 +442,38 @@ class VoiceService : Service(), RecognitionListener {
         }
         val song = list[currentIndex]
         mediaPlayer?.release()
-        mediaPlayer = MediaPlayer().apply {
-            setDataSource(this@VoiceService, song.uri)
-            prepare()
-            setVolume(baseVolume, baseVolume)  // always the persisted level, never a hardcoded default
-            setOnCompletionListener { next() }
+        mediaPlayer = null
+        try {
+            mediaPlayer = MediaPlayer().apply {
+                setDataSource(this@VoiceService, song.uri)
+                prepare()
+                setVolume(baseVolume, baseVolume)  // always the persisted level, never a hardcoded default
+                setOnCompletionListener { next() }
+            }
+        } catch (e: Exception) {
+            // A saved/resumed song's file can go stale between sessions -
+            // moved, deleted, an SD card unplugged, a revoked SAF
+            // permission. This used to be an UNCAUGHT exception here,
+            // which crashed the whole app on the very next launch after
+            // it happened (this is why it "worked the first time" - a
+            // freshly-scanned song is always valid - "crashed the second
+            // time" - resuming whatever was saved from the first session,
+            // which had since gone stale). Never let a single bad file
+            // take the whole app down: log it, clear any resume state
+            // pointing at it so this doesn't repeat forever, and fall
+            // back to a different song instead of crashing.
+            log("[!] Couldn't load \"${song.title}\": ${e.message}")
+            if (Prefs.lastSongUri(this) == song.uri.toString()) {
+                Prefs.setLastPlayback(this, "", 0)
+            }
+            mediaPlayer = null
+            if (fallbackDepth < 1 && list.size > 1) {
+                currentIndex = if (currentIndex == 0) 1 else 0
+                loadCurrentTrack(announce, fallbackDepth + 1)
+            } else {
+                nowPlayingCallback?.invoke("Couldn't load any songs", "", false)
+            }
+            return
         }
         // Pick up whatever trim points were saved for THIS song previously
         // (same idea as the Windows app storing trim_start/trim_end per
@@ -487,6 +611,18 @@ class VoiceService : Service(), RecognitionListener {
 
     fun currentSkipSeconds(): Int = skipSeconds
 
+    /** "<wake> skip 30" - a one-time absolute jump to that position in
+     * whatever's playing RIGHT NOW. Not persisted anywhere (not in
+     * Prefs' global setting, not in SongMetadataStore for this song) -
+     * next time this same song plays, it starts from its normal effective
+     * start again as if this had never happened. Distinct from both the
+     * global "skip all songs" setting and from "trim", which DOES persist
+     * a per-song start point. */
+    fun skipCurrentSongOnly(seconds: Int) {
+        val mp = mediaPlayer ?: return
+        mp.seekTo(seconds.coerceIn(0, 60) * 1000)
+    }
+
     private fun playSongByTitleKey(titleKey: String) {
         val idx = MusicLibrary.all().indexOfFirst { TitleNormalizer.normalize(it.title) == titleKey }
         if (idx == -1) { speak("couldn't find that song"); return }
@@ -552,13 +688,17 @@ class VoiceService : Service(), RecognitionListener {
                 speak("rated ${cmd.value}, saved")
             }
             is CommandParser.Command.Skip -> {
+                // CURRENT SONG ONLY - a one-time jump, not persisted, not
+                // applied to other songs or future plays of this one.
+                // (Corrected per explicit instruction - this used to set
+                // the global skip here, which was wrong: that's what
+                // "skip all songs N" and the Settings control are for.)
+                skipCurrentSongOnly(cmd.seconds)
+                speak("skipped to ${cmd.seconds} seconds")
+            }
+            is CommandParser.Command.SkipAllSongs -> {
                 setSkipSeconds(cmd.seconds)
-                // Windows only plays a short ack chime here (no spoken
-                // confirmation) - Android has no tone-based feedback sound
-                // at all though (everything here is TTS-based), so saying
-                // it briefly is the closest equivalent rather than giving
-                // zero feedback for a global setting change.
-                speak("skip set to ${cmd.seconds} seconds")
+                speak("skip set to ${cmd.seconds} seconds for all songs")
             }
             is CommandParser.Command.Trim -> {
                 setTrim(cmd.frontSeconds, cmd.endSeconds)

@@ -71,10 +71,14 @@ object CommandParser {
                 phrases.add("$wake skip $word")
                 phrases.add("$wake skip $seconds")
                 phrases.add("$wake skip $word seconds")
+                phrases.add("$wake skip all songs $word")
+                phrases.add("$wake skip all songs $seconds")
+                phrases.add("$wake skip all songs $word seconds")
             }
             for (m in MINUTE_STEPS) {
                 val word = NUMBER_WORDS.entries.firstOrNull { it.value == m }?.key ?: m.toString()
                 phrases.add("$wake skip $word minute" + if (m != 1) "s" else "")
+                phrases.add("$wake skip all songs $word minute" + if (m != 1) "s" else "")
             }
             for (front in TRIM_STEPS) for (end in TRIM_STEPS) {
                 if (front != 0 || end != 0) {
@@ -95,7 +99,8 @@ object CommandParser {
     sealed class Command {
         data class Simple(val name: String) : Command()          // play, pause, next, previous, status, delete, undo
         data class Rate(val value: Int) : Command()
-        data class Skip(val seconds: Int) : Command()
+        data class Skip(val seconds: Int) : Command()             // CURRENT SONG ONLY, one-time jump
+        data class SkipAllSongs(val seconds: Int) : Command()     // GLOBAL setting, all songs current+future
         data class Trim(val frontSeconds: Int, val endSeconds: Int) : Command()
         data class PlaySong(val titleKey: String) : Command()
     }
@@ -125,6 +130,31 @@ object CommandParser {
             return null
         }
 
+        // Checked BEFORE the plain "skip ..." patterns below, since
+        // "skip all songs 30" would otherwise get eaten by the bare
+        // "skip (.+)" fallback pattern as if "all songs 30" were a
+        // number word (which wordsToNumber would just fail to parse,
+        // silently dropping the command instead of being ambiguous, but
+        // checking this first is clearer and avoids relying on that).
+        val globalMinutesMatch = Regex("^skip all songs (.+) minutes?$").find(remainder)
+        if (globalMinutesMatch != null) {
+            val minutes = wordsToNumber(globalMinutesMatch.groupValues[1].trim())
+            if (minutes != null && minutes in MINUTE_STEPS) return Command.SkipAllSongs(minutes * 60)
+            return null
+        }
+        val globalSecondsMatch = Regex("^skip all songs (.+) seconds?$").find(remainder)
+        if (globalSecondsMatch != null) {
+            val seconds = wordsToNumber(globalSecondsMatch.groupValues[1].trim())
+            if (seconds != null && seconds in SKIP_STEPS) return Command.SkipAllSongs(seconds)
+            return null
+        }
+        val globalBareMatch = Regex("^skip all songs (.+)$").find(remainder)  // bare = seconds
+        if (globalBareMatch != null) {
+            val seconds = wordsToNumber(globalBareMatch.groupValues[1].trim())
+            if (seconds != null && seconds in SKIP_STEPS) return Command.SkipAllSongs(seconds)
+            return null
+        }
+
         val minutesMatch = Regex("^skip (.+) minutes?$").find(remainder)
         if (minutesMatch != null) {
             val minutes = wordsToNumber(minutesMatch.groupValues[1].trim())
@@ -139,7 +169,7 @@ object CommandParser {
             return null
         }
 
-        val bareSkipMatch = Regex("^skip (.+)$").find(remainder)  // bare "skip 30" = seconds
+        val bareSkipMatch = Regex("^skip (.+)$").find(remainder)  // bare "skip 30" = seconds, CURRENT SONG ONLY
         if (bareSkipMatch != null) {
             val seconds = wordsToNumber(bareSkipMatch.groupValues[1].trim())
             if (seconds != null && seconds in SKIP_STEPS) return Command.Skip(seconds)
