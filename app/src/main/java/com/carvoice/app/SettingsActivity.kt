@@ -63,7 +63,25 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         findViewById<Button>(R.id.addFolderButton).setOnClickListener {
-            folderPickerLauncher.launch(null)
+            // Some devices - mainly bare-bones/car-head-unit Android boxes
+            // without Google's DocumentsUI or any other Storage Access
+            // Framework picker installed - have literally nothing that can
+            // handle ACTION_OPEN_DOCUMENT_TREE. That's a real device
+            // limitation this app can't work around (SAF requires some
+            // picker app to exist), but it should never crash the app -
+            // just tell the person plainly and let them keep using
+            // "Use whole device library" instead, which doesn't need this.
+            try {
+                folderPickerLauncher.launch(null)
+            } catch (e: android.content.ActivityNotFoundException) {
+                Toast.makeText(
+                    this,
+                    "This device has no folder picker app installed, so a specific " +
+                        "folder can't be added. Use \"Whole device library\" below instead - " +
+                        "it finds all music without needing a folder picker.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
         }
 
         val wholeDeviceCheckbox = findViewById<android.widget.CheckBox>(R.id.wholeDeviceCheckbox)
