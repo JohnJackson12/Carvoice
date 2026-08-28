@@ -19,6 +19,7 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import androidx.core.app.NotificationCompat
 import org.json.JSONObject
+import org.vosk.Model
 import org.vosk.Recognizer
 import org.vosk.android.RecognitionListener
 import org.vosk.android.SpeechService
@@ -195,13 +196,47 @@ class VoiceService : Service(), RecognitionListener {
         }.start()
 
         log("Unpacking speech model (first run only)...")
+        // StorageService.unpack() re-runs its own internal "is this
+        // already unpacked" comparison EVERY time it's called, even when
+        // the model directory is already fully there from a previous
+        // launch - and something in that comparison throws a
+        // NullPointerException on a second call (StorageService.java:79,
+        // inside the library itself, confirmed from an actual logcat -
+        // not something in this app's own code to fix directly). The
+        // real fix is to just not call it again once the model's already
+        // unpacked: load it straight from the already-unpacked directory
+        // instead, which also starts up faster since there's no
+        // redundant copy/verify pass every single launch.
+        val modelDir = java.io.File(filesDir, "model")
+        if (modelDir.exists() && (modelDir.listFiles()?.isNotEmpty() == true)) {
+            Thread {
+                try {
+                    val model = Model(modelDir.absolutePath)
+                    progressHandler.post { startRecognizer(model) }
+                } catch (e: Exception) {
+                    CrashLog.record(this, "Loading already-unpacked model failed: ${e}")
+                    // Fall back to a fresh unpack in case the existing
+                    // directory is actually corrupt/incomplete, not just
+                    // "already there".
+                    progressHandler.post { unpackModelFresh() }
+                }
+            }.start()
+        } else {
+            unpackModelFresh()
+        }
+
+        progressHandler.post(progressRunnable)
+    }
+
+    private fun unpackModelFresh() {
         StorageService.unpack(
             this, "model", "model",
             { model -> startRecognizer(model) },
-            { exception -> log("[!] Couldn't load speech model: ${exception.message}") }
+            { exception ->
+                log("[!] Couldn't load speech model: ${exception.message}")
+                CrashLog.record(this, "StorageService.unpack failed: ${exception}")
+            }
         )
-
-        progressHandler.post(progressRunnable)
     }
 
     // "<wake> play <song title>" adds one grammar phrase per song per wake
