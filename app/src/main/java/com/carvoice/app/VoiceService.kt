@@ -199,15 +199,27 @@ class VoiceService : Service(), RecognitionListener {
         // StorageService.unpack() re-runs its own internal "is this
         // already unpacked" comparison EVERY time it's called, even when
         // the model directory is already fully there from a previous
-        // launch - and something in that comparison throws a
+        // launch - and something in that comparison could throw a
         // NullPointerException on a second call (StorageService.java:79,
-        // inside the library itself, confirmed from an actual logcat -
-        // not something in this app's own code to fix directly). The
-        // real fix is to just not call it again once the model's already
-        // unpacked: load it straight from the already-unpacked directory
-        // instead, which also starts up faster since there's no
+        // inside the library itself - confirmed from an actual logcat,
+        // and traced to the model's "uuid" marker file: the CI build used
+        // to write an EMPTY one, which made the library's own uuid check
+        // compare against null. Fixed at the source in
+        // .github/workflows/build-apk.yml). The real fix here, on top of
+        // that, is to just not call unpack() again once the model's
+        // already unpacked: load it straight from the already-unpacked
+        // directory instead, which also starts up faster since there's no
         // redundant copy/verify pass every single launch.
-        val modelDir = java.io.File(filesDir, "model")
+        //
+        // IMPORTANT: StorageService.unpack()/sync() always writes to
+        // getExternalFilesDir(null)/<targetPath>/<sourcePath> - here that's
+        // getExternalFilesDir(null)/model/model, since both are "model"
+        // below - NEVER to filesDir. Checking filesDir (as this used to)
+        // never matched anything real, so this "skip if already unpacked"
+        // branch never actually fired, and unpackModelFresh() ran on
+        // EVERY launch regardless - silently defeating the fix above and
+        // the whole reason this comparison sat in the crash's path at all.
+        val modelDir = java.io.File(getExternalFilesDir(null), "model/model")
         if (modelDir.exists() && (modelDir.listFiles()?.isNotEmpty() == true)) {
             Thread {
                 try {
