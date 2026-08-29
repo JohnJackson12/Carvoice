@@ -143,10 +143,21 @@ object MusicLibrary {
             var seen = 0
             for (uriString in Prefs.folderUris(context)) {
                 try {
-                    result.addAll(scanFolderTree(context, Uri.parse(uriString)) { s ->
-                        seen = s
-                        progressCb?.invoke(seen, result.size)
-                    })
+                    val folderSongs = if (uriString.startsWith("content://")) {
+                        scanFolderTree(context, Uri.parse(uriString)) { s ->
+                            seen = s
+                            progressCb?.invoke(seen, result.size)
+                        }
+                    } else {
+                        // A plain absolute path, added via
+                        // FolderBrowserActivity's in-app browser (used on
+                        // devices with no OS folder-picker app at all).
+                        scanRawFolderTree(java.io.File(uriString)) { s ->
+                            seen = s
+                            progressCb?.invoke(seen, result.size)
+                        }
+                    }
+                    result.addAll(folderSongs)
                 } catch (e: Exception) {
                     // A folder can vanish (SD card removed, permission revoked) -
                     // skip it rather than let one bad folder break the whole scan.
@@ -218,6 +229,36 @@ object MusicLibrary {
                     if (ext in AUDIO_EXTENSIONS) {
                         val title = name.substringBeforeLast('.')
                         found.add(Song(child.uri, title, ""))
+                    }
+                }
+            }
+        }
+        walk(root)
+        onProgress?.invoke(seen)
+        return found
+    }
+
+    /** Same job as scanFolderTree() above, but for a folder added via
+     * FolderBrowserActivity's in-app browser - a plain filesystem path
+     * rather than a SAF tree URI, so plain java.io.File calls (not
+     * DocumentFile/IPC) do the walking. Only reachable at all because
+     * MANAGE_EXTERNAL_STORAGE was granted before that folder could be
+     * picked in the first place - see FolderBrowserActivity. */
+    private fun scanRawFolderTree(root: java.io.File, onProgress: ((Int) -> Unit)? = null): List<Song> {
+        val found = mutableListOf<Song>()
+        var seen = 0
+        fun walk(dir: java.io.File) {
+            val children = dir.listFiles() ?: return
+            for (child in children) {
+                if (child.isDirectory) {
+                    walk(child)
+                } else {
+                    seen++
+                    if (seen % 200 == 0) onProgress?.invoke(seen)
+                    val ext = child.name.substringAfterLast('.', "").lowercase()
+                    if (ext in AUDIO_EXTENSIONS) {
+                        val title = child.name.substringBeforeLast('.')
+                        found.add(Song(Uri.fromFile(child), title, ""))
                     }
                 }
             }

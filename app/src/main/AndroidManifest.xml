@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -17,6 +18,18 @@
     <!-- Pre-API-33 fallback for reading files -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
+    <!-- Lets FolderBrowserActivity list/read any folder in shared storage
+         directly, without any OS document-picker app being involved at
+         all. Added specifically because some bare-bones/car-head-unit
+         Android builds ship with no app that can handle
+         ACTION_OPEN_DOCUMENT_TREE, which made "Add Music Folder" a dead
+         end on those devices - this permission is what makes an
+         in-app-drawn folder browser possible instead of depending on one.
+         Google Play restricts this permission for store-listed apps, but
+         this app is side-loaded (built via GitHub Actions, installed
+         directly), so that restriction doesn't apply here. -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
 
     <application
         android:allowBackup="true"
@@ -38,6 +51,11 @@
         <activity
             android:name=".SettingsActivity"
             android:exported="false" />
+
+        <activity
+            android:name=".FolderBrowserActivity"
+            android:exported="false"
+            android:label="Choose a folder" />
 
         <service
             android:name=".VoiceService"

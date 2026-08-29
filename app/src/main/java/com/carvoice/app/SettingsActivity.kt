@@ -37,6 +37,35 @@ class SettingsActivity : AppCompatActivity() {
         }
     }
 
+    // The in-app browser (see FolderBrowserActivity for why this exists -
+    // short version: some devices have no app installed that can handle
+    // the OS's own folder-picker intent at all). Comes back with a plain
+    // absolute path rather than a content:// tree URI.
+    private val folderBrowserLauncher = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            val path = result.data?.getStringExtra(FolderBrowserActivity.EXTRA_SELECTED_PATH)
+            if (path != null) {
+                Prefs.addFolderUri(this, path)
+                renderFolderList()
+                rescanInBackground()
+            }
+        }
+    }
+
+    // Just for coming BACK from the system's "All files access" settings
+    // screen - if the person actually flipped the switch while there, go
+    // straight into the folder browser rather than making them tap
+    // "Add Music Folder" a second time.
+    private val allFilesAccessLauncher = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) {
+        if (FolderBrowserActivity.hasAccess()) {
+            folderBrowserLauncher.launch(Intent(this, FolderBrowserActivity::class.java))
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_settings)
@@ -63,25 +92,7 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         findViewById<Button>(R.id.addFolderButton).setOnClickListener {
-            // Some devices - mainly bare-bones/car-head-unit Android boxes
-            // without Google's DocumentsUI or any other Storage Access
-            // Framework picker installed - have literally nothing that can
-            // handle ACTION_OPEN_DOCUMENT_TREE. That's a real device
-            // limitation this app can't work around (SAF requires some
-            // picker app to exist), but it should never crash the app -
-            // just tell the person plainly and let them keep using
-            // "Use whole device library" instead, which doesn't need this.
-            try {
-                folderPickerLauncher.launch(null)
-            } catch (e: android.content.ActivityNotFoundException) {
-                Toast.makeText(
-                    this,
-                    "This device has no folder picker app installed, so a specific " +
-                        "folder can't be added. Use \"Whole device library\" below instead - " +
-                        "it finds all music without needing a folder picker.",
-                    Toast.LENGTH_LONG
-                ).show()
-            }
+            addFolderClicked()
         }
 
         val wholeDeviceCheckbox = findViewById<android.widget.CheckBox>(R.id.wholeDeviceCheckbox)
@@ -142,6 +153,57 @@ class SettingsActivity : AppCompatActivity() {
         renderFolderList()
     }
 
+    /** Tries, in order, everything that could possibly let someone pick a
+     * folder on THIS device, since which of these actually works varies a
+     * lot across the odd Android boxes this app ends up running on:
+     *   1. The normal OS picker - needs no special permission, so try it
+     *      first for the (probably-common) case where it's just there.
+     *   2. This app's own in-app browser (FolderBrowserActivity) - works
+     *      on any device, but needs "All files access" granted first, so
+     *      send the person to that system settings screen if it isn't yet.
+     *   3. If EVEN the system's own "All files access" settings screen
+     *      doesn't exist on this particular ROM - vanishingly rare, but
+     *      seen on some stripped-down car units - fall back to just
+     *      saying so plainly, since there's genuinely nothing left to try.
+     */
+    private fun addFolderClicked() {
+        try {
+            folderPickerLauncher.launch(null)
+            return
+        } catch (e: android.content.ActivityNotFoundException) {
+            // No OS picker app on this device - fall through to the
+            // in-app browser below instead.
+        }
+
+        if (FolderBrowserActivity.hasAccess()) {
+            folderBrowserLauncher.launch(Intent(this, FolderBrowserActivity::class.java))
+            return
+        }
+
+        try {
+            val intent = Intent(
+                android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                Uri.parse("package:$packageName")
+            )
+            allFilesAccessLauncher.launch(intent)
+            Toast.makeText(
+                this,
+                "This device has no folder-picker app, so Car Voice Player needs " +
+                    "to browse storage itself instead. Turn on \"Allow access to manage " +
+                    "all files\" on the screen that just opened, then come back here.",
+                Toast.LENGTH_LONG
+            ).show()
+        } catch (e: android.content.ActivityNotFoundException) {
+            Toast.makeText(
+                this,
+                "This device has no way to browse folders at all, so a specific " +
+                    "folder can't be added. Use \"Whole device library\" below instead - " +
+                    "it finds all music without browsing folders.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
     private fun rescanInBackground() {
         val statusText = findViewById<TextView>(R.id.scanStatusText)
         val rescanButton = findViewById<Button>(R.id.rescanButton)
@@ -198,6 +260,11 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun friendlyFolderName(uriString: String): String {
+        if (!uriString.startsWith("content://")) {
+            // A plain absolute path from FolderBrowserActivity - just the
+            // last path segment is the friendliest label.
+            return java.io.File(uriString).name.ifBlank { uriString }
+        }
         return try {
             val uri = Uri.parse(uriString)
             DocumentFile.fromTreeUri(this, uri)?.name ?: DocumentsContract.getTreeDocumentId(uri)

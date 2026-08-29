@@ -372,6 +372,20 @@ class MainActivity : AppCompatActivity() {
      *  - Pre-scoped-storage (API 26-28) - a direct delete typically just
      *    succeeds under the legacy storage model those versions used. */
     private fun deleteSong(song: Song) {
+        // A plain filesystem path from a folder added via the in-app
+        // browser (FolderBrowserActivity) - neither ContentResolver nor
+        // DocumentFile apply to a file:// URI, so just delete it directly.
+        // Only reachable with MANAGE_EXTERNAL_STORAGE already granted,
+        // which is exactly what let this song be added in the first place.
+        if (song.uri.scheme == "file") {
+            val path = song.uri.path
+            if (path != null && java.io.File(path).delete()) {
+                finishDelete(song)
+            } else {
+                Toast.makeText(this, "Couldn't delete - the file may be read-only or already gone.", Toast.LENGTH_LONG).show()
+            }
+            return
+        }
         try {
             val rows = contentResolver.delete(song.uri, null, null)
             if (rows > 0) {
