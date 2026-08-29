@@ -59,6 +59,19 @@ object MusicLibrary {
         mainHandler.post { listeners.forEach { it() } }
     }
 
+    /** The other half of [removeSong] - puts a song back after
+     * SongDeleter.undoLast() restores its underlying file, without
+     * waiting on a full rescan() (which would also work, just far more
+     * slowly for a large library, and rescan() isn't guaranteed to see a
+     * just-restored file immediately on every storage backend). */
+    fun restoreSong(context: Context, song: Song) {
+        if (songs.none { it.uri.toString() == song.uri.toString() }) {
+            songs.add(song)
+        }
+        saveCache(context)
+        mainHandler.post { listeners.forEach { it() } }
+    }
+
     /** Instantly populates from whatever was found last time, without
      * touching disk/SAF at all - call this first at startup so something
      * is usually already playable/browsable while rescan() (slow, real

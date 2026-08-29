@@ -2,7 +2,6 @@ package com.carvoice.app
 
 import android.Manifest
 import android.app.AlertDialog
-import android.app.RecoverableSecurityException
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -22,7 +21,6 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import androidx.documentfile.provider.DocumentFile
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 
@@ -47,17 +45,17 @@ class MainActivity : AppCompatActivity() {
     private var filteredSongs: List<Song> = emptyList()
     private var libraryListener: (() -> Unit)? = null
     private var userIsDraggingSeekBar = false
-    private var pendingDeleteSong: Song? = null
+
+    // Whatever SongDeleter.Outcome.NeedsConsent.onResult should run once
+    // the system consent dialog below returns - see resolveOutcome().
+    private var pendingConsentResult: ((Boolean) -> Unit)? = null
 
     private val deleteRequestLauncher = registerForActivityResult(
         ActivityResultContracts.StartIntentSenderForResult()
     ) { result ->
-        val song = pendingDeleteSong
-        pendingDeleteSong = null
-        if (song != null) {
-            if (result.resultCode == RESULT_OK) finishDelete(song)
-            else Toast.makeText(this, "Delete cancelled.", Toast.LENGTH_SHORT).show()
-        }
+        val callback = pendingConsentResult
+        pendingConsentResult = null
+        callback?.invoke(result.resultCode == RESULT_OK)
     }
 
     private val requiredPermissions: Array<String>
@@ -211,6 +209,10 @@ class MainActivity : AppCompatActivity() {
                 updateTrimLabel(front, end)
             }
         }
+        // Lets a voice "delete"/"undo" command show the same system
+        // consent dialog the manual delete paths below use - see
+        // SongDeleter's class doc and VoiceService.consentResolver.
+        VoiceService.consentResolver = { needsConsent, onFinished -> resolveOutcome(needsConsent, onFinished) }
     }
 
     private fun buildRatingStars() {
@@ -256,6 +258,7 @@ class MainActivity : AppCompatActivity() {
         VoiceService.progressCallback = null
         VoiceService.ratingCallback = null
         VoiceService.trimCallback = null
+        VoiceService.consentResolver = null
         super.onDestroy()
     }
 
@@ -297,7 +300,9 @@ class MainActivity : AppCompatActivity() {
     //    one-tap user consent to remove a file this app didn't create
     //    itself (scoped storage, API 29+) - that consent step is an
     //    unavoidable OS requirement, not something this app is choosing
-    //    to add. ------------------------------------------------------
+    //    to add. The actual delete/undo logic lives in SongDeleter, shared
+    //    with VoiceService's "<wake> delete"/"<wake> undo" commands so the
+    //    two paths can never disagree about what happened. ---------------
 
     private fun showSongContextMenu(filteredIndex: Int) {
         val song = filteredSongs.getOrNull(filteredIndex) ?: return
@@ -334,23 +339,30 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun confirmAndDeleteSong(song: Song) {
+        val wake = Prefs.wakeWord(this)
+        val message = if (SongDeleter.wouldBeUndoable(song)) {
+            "\"${song.title}\" will be removed. If you didn't mean it, say " +
+                "\"$wake undo\" (or use Settings while it's still fresh)."
+        } else {
+            "\"${song.title}\" will be permanently deleted from your device. This can't be undone."
+        }
         AlertDialog.Builder(this)
             .setTitle("Delete this song?")
-            .setMessage("\"${song.title}\" will be permanently deleted from your device. This can't be undone.")
-            .setPositiveButton("Delete") { _, _ -> deleteSong(song) }
+            .setMessage(message)
+            .setPositiveButton("Delete") { _, _ -> performDelete(song) }
             .setNegativeButton("Cancel", null)
             .show()
     }
 
     /** Called by the trash-icon button in the now-playing panel - deletes
      * whatever's currently loaded/playing, same confirmation flow as the
-     * long-press menu's Delete option. Matches the currently-playing song
-     * by title against allSongs, same lookup pattern used elsewhere in
-     * this file (highlightPlayingRow()) since VoiceService doesn't expose
-     * a direct "current Song object" getter. */
+     * long-press menu's Delete option. Identifies "the current song" via
+     * VoiceService.currentSong() (the actual Song at currentIndex) rather
+     * than matching the now-playing title TEXT against allSongs - that
+     * text-matching approach could silently pick the wrong song whenever
+     * two songs shared a title. */
     private fun deleteCurrentSong() {
-        val title = nowPlayingTitle.text.toString()
-        val song = allSongs.firstOrNull { it.title == title }
+        val song = VoiceService.instance?.currentSong()
         if (song == null) {
             Toast.makeText(this, "Nothing loaded to delete.", Toast.LENGTH_SHORT).show()
             return
@@ -358,70 +370,39 @@ class MainActivity : AppCompatActivity() {
         confirmAndDeleteSong(song)
     }
 
-    /** Deletes the actual underlying file, not just this app's own record
-     * of it. Three storage sources this app deals with need slightly
-     * different handling:
-     *  - A SAF folder (added via "Add Music Folder") with WRITE permission
-     *    already granted (see SettingsActivity's folder picker) - a plain
-     *    DocumentFile.delete() just works, no prompt needed.
-     *  - A MediaStore song NOT created by this app (the common case,
-     *    since this app never writes music files itself) on API 29+ -
-     *    the OS throws RecoverableSecurityException and requires routing
-     *    through its own one-tap consent screen. This is a hard platform
-     *    requirement, not something to work around.
-     *  - Pre-scoped-storage (API 26-28) - a direct delete typically just
-     *    succeeds under the legacy storage model those versions used. */
-    private fun deleteSong(song: Song) {
-        // A plain filesystem path from a folder added via the in-app
-        // browser (FolderBrowserActivity) - neither ContentResolver nor
-        // DocumentFile apply to a file:// URI, so just delete it directly.
-        // Only reachable with MANAGE_EXTERNAL_STORAGE already granted,
-        // which is exactly what let this song be added in the first place.
-        if (song.uri.scheme == "file") {
-            val path = song.uri.path
-            if (path != null && java.io.File(path).delete()) {
-                finishDelete(song)
-            } else {
-                Toast.makeText(this, "Couldn't delete - the file may be read-only or already gone.", Toast.LENGTH_LONG).show()
-            }
-            return
-        }
-        try {
-            val rows = contentResolver.delete(song.uri, null, null)
-            if (rows > 0) {
-                finishDelete(song)
-                return
-            }
-            // Some SAF providers return 0 instead of throwing when a plain
-            // ContentResolver.delete() isn't the right path for them -
-            // DocumentFile's own delete() is the more reliable call for a
-            // tree-document URI specifically.
-            val doc = DocumentFile.fromSingleUri(this, song.uri)
-            if (doc != null && doc.delete()) {
-                finishDelete(song)
-            } else {
-                Toast.makeText(this, "Couldn't delete - the file may be read-only or already gone.", Toast.LENGTH_LONG).show()
-            }
-        } catch (e: RecoverableSecurityException) {
-            // The actual platform-required consent flow, launched via the
-            // exact IntentSender Android hands back for this - not
-            // something this app can shortcut or pre-approve on your
-            // behalf, by design (this is the same protection that stops
-            // any app from silently deleting your files).
-            pendingDeleteSong = song
-            deleteRequestLauncher.launch(
-                IntentSenderRequest.Builder(e.userAction.actionIntent.intentSender).build()
-            )
-        } catch (e: Exception) {
-            Toast.makeText(this, "Couldn't delete: ${e.message}", Toast.LENGTH_LONG).show()
+    /** Runs [outcome] to completion, showing the system consent dialog
+     * (via deleteRequestLauncher) for any NeedsConsent step and feeding
+     * its result straight back into SongDeleter - see SongDeleter's class
+     * doc for why that retry step matters on API 29 specifically, and why
+     * it's a no-op-but-still-correct step on API 30+. */
+    private fun resolveOutcome(outcome: SongDeleter.Outcome, onFinished: (SongDeleter.Outcome) -> Unit) {
+        if (outcome is SongDeleter.Outcome.NeedsConsent) {
+            pendingConsentResult = { approved -> resolveOutcome(outcome.onResult(approved), onFinished) }
+            deleteRequestLauncher.launch(IntentSenderRequest.Builder(outcome.intentSender).build())
+        } else {
+            onFinished(outcome)
         }
     }
 
-    private fun finishDelete(song: Song) {
-        val wasCurrentSong = nowPlayingTitle.text.toString() == song.title
-        MusicLibrary.removeSong(this, song.uri)
-        Toast.makeText(this, "Deleted.", Toast.LENGTH_SHORT).show()
-        if (wasCurrentSong) VoiceService.instance?.next()
+    private fun performDelete(song: Song) {
+        resolveOutcome(SongDeleter.delete(this, song)) { outcome ->
+            when (outcome) {
+                is SongDeleter.Outcome.Done -> {
+                    val wasCurrentSong = VoiceService.instance?.currentSong()?.uri == song.uri
+                    MusicLibrary.removeSong(this, song.uri)
+                    Toast.makeText(
+                        this,
+                        if (outcome.undoable) "Deleted. Say \"${Prefs.wakeWord(this)} undo\" to bring it back."
+                        else "Deleted.",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    if (wasCurrentSong) VoiceService.instance?.next()
+                }
+                is SongDeleter.Outcome.Failed ->
+                    Toast.makeText(this, outcome.message, Toast.LENGTH_LONG).show()
+                else -> {}
+            }
+        }
     }
 
     private fun hasAllPermissions(): Boolean =

@@ -50,6 +50,19 @@ class VoiceService : Service(), RecognitionListener {
         // running service without binding - the service posts itself
         // here once alive.
         var instance: VoiceService? = null
+
+        // Set by MainActivity while it's around - lets a voice
+        // "<wake> delete" / "<wake> undo" command complete an OS consent
+        // dialog (RecoverableSecurityException, or a MediaStore
+        // trash/untrash request), which is a hard platform requirement
+        // that only a real Activity can show. Left null (and just
+        // reported back as a SongDeleter.Outcome.Failed - see
+        // runDeleteOutcome()) when MainActivity isn't currently around -
+        // the service keeps listening/playing regardless, same as every
+        // other MainActivity-optional callback here, but a delete that
+        // genuinely needs a tap can't silently happen with no one able to
+        // tap it.
+        var consentResolver: ((SongDeleter.Outcome.NeedsConsent, (SongDeleter.Outcome) -> Unit) -> Unit)? = null
     }
 
     private var speechService: SpeechService? = null
@@ -612,6 +625,14 @@ class VoiceService : Service(), RecognitionListener {
 
     private fun currentUriKey(): String? = MusicLibrary.all().getOrNull(currentIndex)?.uri?.toString()
 
+    /** The actual Song object at currentIndex - public so both the voice
+     * delete command and MainActivity's now-playing trash icon identify
+     * "the current song" the exact same way (by list identity, via
+     * currentIndex), rather than MainActivity's old approach of matching
+     * the now-playing title TEXT back against the song list, which could
+     * pick the wrong song whenever two songs shared a title. */
+    fun currentSong(): Song? = MusicLibrary.all().getOrNull(currentIndex)
+
     /** Public so both the voice "rate" command and the GUI's star row call
      * the exact same save path - can't disagree about what "rated" means. */
     fun setRating(value: Int) {
@@ -679,6 +700,68 @@ class VoiceService : Service(), RecognitionListener {
         mp.seekTo(seconds.coerceIn(0, 60) * 1000)
     }
 
+    // -- voice delete / undo ---------------------------------------------------
+    // Shares SongDeleter with MainActivity's manual delete paths (see that
+    // class for the full per-storage-type breakdown) so voice and manual
+    // delete can never disagree about what actually happened to a file.
+
+    /** Drives a SongDeleter.Outcome to a terminal result, handing off to
+     * consentResolver (MainActivity, if it's around) for any step that
+     * needs a real one-tap OS consent dialog. */
+    private fun runDeleteOutcome(outcome: SongDeleter.Outcome, onFinished: (SongDeleter.Outcome) -> Unit) {
+        if (outcome is SongDeleter.Outcome.NeedsConsent) {
+            val resolver = consentResolver
+            if (resolver != null) {
+                resolver(outcome) { next -> runDeleteOutcome(next, onFinished) }
+            } else {
+                onFinished(SongDeleter.Outcome.Failed(
+                    "that needs the app open to confirm - open Car Voice Player and try again"))
+            }
+        } else {
+            onFinished(outcome)
+        }
+    }
+
+    /** "<wake> delete" - always acts on whatever's currently loaded, same
+     * as the Windows app's player.current_song(). No confirmation dialog
+     * (unlike the manual trash-icon/long-press paths) - a voice command
+     * you spoke on purpose IS the confirmation, matching how every other
+     * voice command here (rate, trim, skip) applies immediately too. */
+    private fun voiceDeleteCurrentSong() {
+        val song = currentSong()
+        if (song == null) { speak("nothing playing to delete"); return }
+        runDeleteOutcome(SongDeleter.delete(this, song)) { outcome ->
+            when (outcome) {
+                is SongDeleter.Outcome.Done -> {
+                    MusicLibrary.removeSong(this, song.uri)
+                    speak(if (outcome.undoable) "deleted, say undo to bring it back" else "deleted")
+                    next()
+                }
+                is SongDeleter.Outcome.Failed -> speak(outcome.message)
+                else -> {}
+            }
+        }
+    }
+
+    /** "<wake> undo" - restores the most recently voice- or manually-
+     * deleted song, if that deletion landed somewhere undoable (this
+     * app's own trash folder, or MediaStore's real trash on Android 11+ -
+     * see SongDeleter). A permanent delete (older Android, or a song
+     * added via "Add Music Folder") has nothing here to undo. */
+    private fun voiceUndo() {
+        if (!SongDeleter.hasUndo()) { speak("nothing to undo"); return }
+        runDeleteOutcome(SongDeleter.undoLast(this)) { outcome ->
+            when (outcome) {
+                is SongDeleter.Outcome.Done -> {
+                    MusicLibrary.restoreSong(this, outcome.song)
+                    speak("restored ${outcome.song.title}")
+                }
+                is SongDeleter.Outcome.Failed -> speak(outcome.message)
+                else -> speak("nothing to undo")
+            }
+        }
+    }
+
     private fun playSongByTitleKey(titleKey: String) {
         val idx = MusicLibrary.all().indexOfFirst { TitleNormalizer.normalize(it.title) == titleKey }
         if (idx == -1) { speak("couldn't find that song"); return }
@@ -737,7 +820,8 @@ class VoiceService : Service(), RecognitionListener {
                 "next" -> next()
                 "previous" -> previous()
                 "status" -> status()
-                "delete", "undo" -> speak("not supported yet on this build")
+                "delete" -> voiceDeleteCurrentSong()
+                "undo" -> voiceUndo()
             }
             is CommandParser.Command.Rate -> {
                 setRating(cmd.value)
