@@ -7,7 +7,7 @@
     android:focusable="true"
     android:focusableInTouchMode="true">
 
-    <!-- Left pane: searchable song list, ~55% width -->
+    <!-- Left pane: artwork (now playing / up next), searchable song list -->
     <LinearLayout
         android:layout_width="0dp"
         android:layout_height="match_parent"
@@ -24,12 +24,191 @@
             android:imeOptions="actionSearch"
             android:singleLine="true" />
 
-        <androidx.recyclerview.widget.RecyclerView
-            android:id="@+id/songRecyclerView"
+        <!-- Artwork strip, split in half: left = the song actually
+             playing right now, right = whatever plays next - so you can
+             always see both without leaving the list screen. Each panel
+             falls back to a plain music-note placeholder when the file
+             has no embedded cover art. -->
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="1"
-            android:layout_marginTop="8dp" />
+            android:layout_marginTop="8dp"
+            android:orientation="horizontal">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:gravity="center">
+
+                <ImageView
+                    android:id="@+id/nowPlayingArt"
+                    android:layout_width="0dp"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:layout_marginEnd="4dp"
+                    android:scaleType="centerCrop"
+                    android:background="?android:attr/colorBackground"
+                    android:contentDescription="Now playing artwork"
+                    android:src="@android:drawable/ic_media_play" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginEnd="4dp"
+                    android:gravity="center"
+                    android:text="NOW PLAYING"
+                    android:textSize="10sp"
+                    android:textStyle="bold"
+                    android:textColor="?android:attr/textColorSecondary" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:gravity="center">
+
+                <ImageView
+                    android:id="@+id/upNextArt"
+                    android:layout_width="0dp"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:layout_marginStart="4dp"
+                    android:scaleType="centerCrop"
+                    android:background="?android:attr/colorBackground"
+                    android:contentDescription="Up next artwork"
+                    android:src="@android:drawable/ic_media_next" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="4dp"
+                    android:gravity="center"
+                    android:text="UP NEXT"
+                    android:textSize="10sp"
+                    android:textStyle="bold"
+                    android:textColor="?android:attr/textColorSecondary" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- Column headers for the 4-column song list below. -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:orientation="horizontal"
+            android:paddingStart="12dp"
+            android:paddingEnd="8dp">
+
+            <TextView
+                android:layout_width="28dp"
+                android:layout_height="wrap_content"
+                android:text="#"
+                android:textSize="10sp"
+                android:textStyle="bold"
+                android:gravity="end"
+                android:textColor="?android:attr/textColorSecondary" />
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="3"
+                android:layout_marginStart="10dp"
+                android:text="TITLE"
+                android:textSize="10sp"
+                android:textStyle="bold"
+                android:textColor="?android:attr/textColorSecondary" />
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="2"
+                android:layout_marginStart="10dp"
+                android:text="ARTIST"
+                android:textSize="10sp"
+                android:textStyle="bold"
+                android:textColor="?android:attr/textColorSecondary" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="RATING"
+                android:textSize="10sp"
+                android:textStyle="bold"
+                android:textColor="?android:attr/textColorSecondary" />
+        </LinearLayout>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginTop="4dp"
+            android:background="?android:attr/listDivider" />
+
+        <!-- The song list itself, plus a pinned overlay row (below) that
+             keeps the currently-playing track visible even when you've
+             scrolled/browsed somewhere else in the list. -->
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1">
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/songRecyclerView"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+
+            <!-- Hidden by default; MainActivity shows this whenever the
+                 real now-playing row scrolls out of view, so the current
+                 track is never fully out of sight while browsing. Tapping
+                 it scrolls the list back to that row. -->
+            <LinearLayout
+                android:id="@+id/nowPlayingPin"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center_vertical"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:background="@color/now_playing_row"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp"
+                android:paddingTop="10dp"
+                android:paddingBottom="10dp"
+                android:elevation="6dp"
+                android:visibility="gone"
+                android:clickable="true"
+                android:focusable="true">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="\u25B6"
+                    android:textColor="@color/now_playing_text"
+                    android:textSize="14sp" />
+
+                <TextView
+                    android:id="@+id/nowPlayingPinText"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginStart="8dp"
+                    android:maxLines="1"
+                    android:ellipsize="end"
+                    android:textStyle="bold"
+                    android:textColor="@color/now_playing_text" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="tap to jump to it"
+                    android:textSize="10sp"
+                    android:textColor="@color/now_playing_text" />
+            </LinearLayout>
+        </FrameLayout>
     </LinearLayout>
 
     <View
@@ -99,6 +278,33 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp" />
+
+        <!-- Elapsed / remaining time - previously the seek bar gave no
+             indication at all of how far into the song you were. -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/elapsedTime"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="0:00"
+                android:textSize="12sp"
+                android:fontFamily="monospace"
+                android:textColor="?android:attr/textColorSecondary" />
+
+            <TextView
+                android:id="@+id/remainingTime"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="-0:00"
+                android:textSize="12sp"
+                android:fontFamily="monospace"
+                android:textColor="?android:attr/textColorSecondary" />
+        </LinearLayout>
 
         <LinearLayout
             android:id="@+id/ratingRow"
@@ -213,6 +419,7 @@
             android:textColor="?android:attr/textColorSecondary" />
 
         <ScrollView
+            android:id="@+id/logScrollView"
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="1"

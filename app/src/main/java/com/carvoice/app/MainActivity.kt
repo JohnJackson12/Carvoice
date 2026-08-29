@@ -9,9 +9,12 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.view.View
 import android.widget.EditText
 import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
@@ -23,6 +26,9 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
 
@@ -38,7 +44,15 @@ class MainActivity : AppCompatActivity() {
     private lateinit var playPauseButton: ImageButton
     private lateinit var searchBox: EditText
     private lateinit var recyclerView: RecyclerView
+    private lateinit var elapsedTime: TextView
+    private lateinit var remainingTime: TextView
     private var logText: TextView? = null  // only present in the landscape layout
+    private var logScrollView: ScrollView? = null  // ditto
+    private var nowPlayingArt: ImageView? = null  // landscape-only artwork panels
+    private var upNextArt: ImageView? = null
+    private var nowPlayingPin: View? = null  // landscape-only "still playing, tap to jump" bar
+    private var nowPlayingPinText: TextView? = null
+    private val logTimeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
 
     private lateinit var adapter: SongAdapter
     private var allSongs: List<Song> = emptyList()
@@ -101,7 +115,14 @@ class MainActivity : AppCompatActivity() {
         playPauseButton = findViewById(R.id.playPauseButton)
         searchBox = findViewById(R.id.searchBox)
         recyclerView = findViewById(R.id.songRecyclerView)
+        elapsedTime = findViewById(R.id.elapsedTime)
+        remainingTime = findViewById(R.id.remainingTime)
         logText = findViewById(R.id.logText)  // null on portrait, that's fine
+        logScrollView = findViewById(R.id.logScrollView)
+        nowPlayingArt = findViewById(R.id.nowPlayingArt)
+        upNextArt = findViewById(R.id.upNextArt)
+        nowPlayingPin = findViewById(R.id.nowPlayingPin)
+        nowPlayingPinText = findViewById(R.id.nowPlayingPinText)
 
         adapter = SongAdapter(
             emptyList(),
@@ -110,6 +131,13 @@ class MainActivity : AppCompatActivity() {
         )
         recyclerView.layoutManager = LinearLayoutManager(this)
         recyclerView.adapter = adapter
+
+        // Keeps the now-playing pin's shown/hidden state in sync with
+        // actual scroll position - see updateNowPlayingPinVisibility().
+        recyclerView.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrolled(rv: RecyclerView, dx: Int, dy: Int) = updateNowPlayingPinVisibility()
+        })
+        nowPlayingPin?.setOnClickListener { scrollToPlayingRow(smooth = true) }
 
         volumeSeekBar.max = 100
         volumeSeekBar.progress = (Prefs.playbackVolume(this) * 100).toInt()
@@ -191,6 +219,7 @@ class MainActivity : AppCompatActivity() {
                     else defaultTextColor()
                 )
                 highlightPlayingRow()
+                refreshArtworkPanels()
             }
         }
         VoiceService.progressCallback = { position, duration ->
@@ -199,9 +228,21 @@ class MainActivity : AppCompatActivity() {
                     seekBar.max = duration.coerceAtLeast(1)
                     seekBar.progress = position
                 }
+                // Previously the seek bar gave no sense at all of how far
+                // into the song you were - elapsed counts up, remaining
+                // counts down to zero, same convention as most players.
+                elapsedTime.text = TimeFormat.format(position)
+                remainingTime.text = "-" + TimeFormat.format((duration - position).coerceAtLeast(0))
             }
         }
-        VoiceService.ratingCallback = { rating -> runOnUiThread { setRatingStars(rating) } }
+        VoiceService.ratingCallback = { rating ->
+            runOnUiThread {
+                setRatingStars(rating)
+                // The list's own Rating column would otherwise show a
+                // stale value until the next full refresh.
+                adapter.refreshRating(VoiceService.instance?.currentSong()?.uri)
+            }
+        }
         VoiceService.trimCallback = { front, end ->
             runOnUiThread {
                 trimStartSeekBar.progress = front
@@ -249,6 +290,7 @@ class MainActivity : AppCompatActivity() {
             trimEndSeekBar.progress = end
             updateTrimLabel(front, end)
         }
+        refreshArtworkPanels()
     }
 
     override fun onDestroy() {
@@ -265,6 +307,7 @@ class MainActivity : AppCompatActivity() {
     private fun onLibraryChanged() {
         allSongs = MusicLibrary.all()
         applyFilter(searchBox.text?.toString() ?: "")
+        refreshArtworkPanels()
     }
 
     private fun applyFilter(query: String) {
@@ -280,6 +323,81 @@ class MainActivity : AppCompatActivity() {
         val playingTitle = nowPlayingTitle.text.toString()
         val idx = filteredSongs.indexOfFirst { it.title == playingTitle }
         adapter.playingIndex = idx
+        updateNowPlayingPinVisibility()
+    }
+
+    /** Loads the "Now Playing" / "Up Next" artwork panels above the song
+     * list (landscape only - both views are null on portrait). Safe to
+     * call often; AlbumArt caches decoded bitmaps so repeat calls for the
+     * same song are cheap. */
+    private fun refreshArtworkPanels() {
+        val svc = VoiceService.instance
+        val current = svc?.currentSong()
+        val upNext = svc?.peekNext()
+        nowPlayingArt?.let { iv ->
+            AlbumArt.loadAsync(this, current?.uri) { bitmap ->
+                if (bitmap != null) iv.setImageBitmap(bitmap)
+                else iv.setImageResource(android.R.drawable.ic_media_play)
+            }
+        }
+        upNextArt?.let { iv ->
+            AlbumArt.loadAsync(this, upNext?.uri) { bitmap ->
+                if (bitmap != null) iv.setImageBitmap(bitmap)
+                else iv.setImageResource(android.R.drawable.ic_media_next)
+            }
+        }
+    }
+
+    /** Shows/hides the "still playing X, tap to jump to it" pinned bar
+     * over the middle of the song list. The real now-playing row can
+     * scroll out of view the moment you browse elsewhere in the list -
+     * this pin is what keeps the current track visible/reachable no
+     * matter where you've scrolled to, without permanently reserving
+     * space for it when it's already on-screen. Landscape-only (the pin
+     * view is null on portrait). */
+    private fun updateNowPlayingPinVisibility() {
+        val pin = nowPlayingPin ?: return
+        val playingIndex = adapter.playingIndex
+        if (playingIndex < 0) {
+            pin.visibility = View.GONE
+            return
+        }
+        val layoutManager = recyclerView.layoutManager as? LinearLayoutManager
+        val firstVisible = layoutManager?.findFirstCompletelyVisibleItemPosition() ?: -1
+        val lastVisible = layoutManager?.findLastCompletelyVisibleItemPosition() ?: -1
+        val isFullyVisible = playingIndex in firstVisible..lastVisible
+        if (isFullyVisible) {
+            pin.visibility = View.GONE
+        } else {
+            nowPlayingPinText?.text = filteredSongs.getOrNull(playingIndex)?.title ?: nowPlayingTitle.text
+            pin.visibility = View.VISIBLE
+        }
+    }
+
+    /** Scrolls the song list so the currently-playing row lands roughly in
+     * the middle of the visible area, rather than merely "somewhere on
+     * screen" - matches what the now-playing pin promises ("tap to jump
+     * to it") and what item 5 of the redesign asked for: the current
+     * track should land back in the middle of view, not at whatever edge
+     * a plain scrollToPosition() would leave it at. */
+    private fun scrollToPlayingRow(smooth: Boolean) {
+        val playingIndex = adapter.playingIndex
+        if (playingIndex < 0) return
+        recyclerView.post {
+            val layoutManager = recyclerView.layoutManager as? LinearLayoutManager ?: return@post
+            val offset = (recyclerView.height / 2) - (recyclerView.height / (layoutManager.childCount.coerceAtLeast(1) * 2))
+            if (smooth) {
+                val smoothScroller = object : androidx.recyclerview.widget.LinearSmoothScroller(this) {
+                    override fun calculateDtToFit(viewStart: Int, viewEnd: Int, boxStart: Int, boxEnd: Int, snapPreference: Int): Int {
+                        return (boxStart + (boxEnd - boxStart) / 2) - (viewStart + (viewEnd - viewStart) / 2)
+                    }
+                }
+                smoothScroller.targetPosition = playingIndex
+                layoutManager.startSmoothScroll(smoothScroller)
+            } else {
+                layoutManager.scrollToPositionWithOffset(playingIndex, offset.coerceAtLeast(0))
+            }
+        }
     }
 
     private fun defaultTextColor(): Int {
@@ -384,22 +502,50 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** Appends a timestamped line to the Activity panel (landscape only -
+     * a no-op on portrait, where logText is null). Kept separate from the
+     * voice-command log lines (VoiceService.logCallback) so the wording
+     * here can be specific to what MainActivity itself just did, but both
+     * end up in the exact same panel/scrollback. */
+    private fun logActivity(message: String) {
+        logText?.append("[${logTimeFormat.format(Date())}] $message\n")
+        logScrollView?.post { logScrollView?.fullScroll(View.FOCUS_DOWN) }
+    }
+
     private fun performDelete(song: Song) {
+        val label = if (song.artist.isNotBlank()) "\"${song.title}\" by ${song.artist}" else "\"${song.title}\""
         resolveOutcome(SongDeleter.delete(this, song)) { outcome ->
             when (outcome) {
                 is SongDeleter.Outcome.Done -> {
                     val wasCurrentSong = VoiceService.instance?.currentSong()?.uri == song.uri
                     MusicLibrary.removeSong(this, song.uri)
-                    Toast.makeText(
-                        this,
-                        if (outcome.undoable) "Deleted. Say \"${Prefs.wakeWord(this)} undo\" to bring it back."
-                        else "Deleted.",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                    if (wasCurrentSong) VoiceService.instance?.next()
+                    val toastMessage = if (outcome.undoable)
+                        "Deleted. Say \"${Prefs.wakeWord(this)} undo\" to bring it back."
+                    else "Deleted."
+                    Toast.makeText(this, toastMessage, Toast.LENGTH_SHORT).show()
+                    // Previously deleting gave essentially no lasting
+                    // feedback about WHAT was removed - a Toast alone
+                    // disappears in a couple seconds and there was no
+                    // record of it afterward. This puts a permanent,
+                    // detailed line in the Activity panel: what was
+                    // deleted, whether it can still be undone, and
+                    // (when it was the playing track) what took over.
+                    logActivity(
+                        "Deleted $label" +
+                            if (outcome.undoable) " (undoable - say \"${Prefs.wakeWord(this)} undo\")" else " (permanent)"
+                    )
+                    if (wasCurrentSong) {
+                        VoiceService.instance?.next()
+                        Handler(Looper.getMainLooper()).postDelayed({
+                            val next = VoiceService.instance?.currentSong()
+                            if (next != null) logActivity("Now playing \"${next.title}\" (was playing the deleted song)")
+                        }, 300)
+                    }
                 }
-                is SongDeleter.Outcome.Failed ->
+                is SongDeleter.Outcome.Failed -> {
                     Toast.makeText(this, outcome.message, Toast.LENGTH_LONG).show()
+                    logActivity("Delete failed for $label: ${outcome.message}")
+                }
                 else -> {}
             }
         }

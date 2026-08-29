@@ -633,6 +633,17 @@ class VoiceService : Service(), RecognitionListener {
      * pick the wrong song whenever two songs shared a title. */
     fun currentSong(): Song? = MusicLibrary.all().getOrNull(currentIndex)
 
+    /** Whatever next() would load right now, without actually advancing
+     * playback - used to show "Up Next" artwork/info in the GUI so the
+     * second artwork panel always reflects what's really coming next,
+     * including the wraparound back to the top of the list. Null only
+     * when the library is empty. */
+    fun peekNext(): Song? {
+        val list = MusicLibrary.all()
+        if (list.isEmpty() || currentIndex !in list.indices) return list.firstOrNull()
+        return list[(currentIndex + 1) % list.size]
+    }
+
     /** Public so both the voice "rate" command and the GUI's star row call
      * the exact same save path - can't disagree about what "rated" means. */
     fun setRating(value: Int) {
@@ -730,14 +741,23 @@ class VoiceService : Service(), RecognitionListener {
     private fun voiceDeleteCurrentSong() {
         val song = currentSong()
         if (song == null) { speak("nothing playing to delete"); return }
+        val label = if (song.artist.isNotBlank()) "\"${song.title}\" by ${song.artist}" else "\"${song.title}\""
         runDeleteOutcome(SongDeleter.delete(this, song)) { outcome ->
             when (outcome) {
                 is SongDeleter.Outcome.Done -> {
                     MusicLibrary.removeSong(this, song.uri)
                     speak(if (outcome.undoable) "deleted, say undo to bring it back" else "deleted")
+                    // Same detailed Activity-panel line the manual delete
+                    // paths write (see MainActivity.performDelete) - a
+                    // voice delete shouldn't leave a less complete trail
+                    // than tapping the trash icon does.
+                    log("Deleted $label" + if (outcome.undoable) " (undoable - say \"undo\")" else " (permanent)")
                     next()
                 }
-                is SongDeleter.Outcome.Failed -> speak(outcome.message)
+                is SongDeleter.Outcome.Failed -> {
+                    speak(outcome.message)
+                    log("Delete failed for $label: ${outcome.message}")
+                }
                 else -> {}
             }
         }
@@ -755,8 +775,12 @@ class VoiceService : Service(), RecognitionListener {
                 is SongDeleter.Outcome.Done -> {
                     MusicLibrary.restoreSong(this, outcome.song)
                     speak("restored ${outcome.song.title}")
+                    log("Restored \"${outcome.song.title}\"")
                 }
-                is SongDeleter.Outcome.Failed -> speak(outcome.message)
+                is SongDeleter.Outcome.Failed -> {
+                    speak(outcome.message)
+                    log("Undo failed: ${outcome.message}")
+                }
                 else -> speak("nothing to undo")
             }
         }

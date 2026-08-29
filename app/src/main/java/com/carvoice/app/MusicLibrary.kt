@@ -86,7 +86,15 @@ object MusicLibrary {
             val loaded = mutableListOf<Song>()
             for (i in 0 until arr.length()) {
                 val obj = arr.getJSONObject(i)
-                loaded.add(Song(Uri.parse(obj.getString("uri")), obj.getString("title"), obj.getString("artist")))
+                loaded.add(
+                    Song(
+                        Uri.parse(obj.getString("uri")),
+                        obj.getString("title"),
+                        obj.getString("artist"),
+                        obj.optString("folder", ""),
+                        obj.optInt("folderIndex", 0),
+                    )
+                )
             }
             songs.clear()
             // Sorted here too (not just trusting the cache file was saved
@@ -109,6 +117,8 @@ object MusicLibrary {
                 obj.put("uri", song.uri.toString())
                 obj.put("title", song.title)
                 obj.put("artist", song.artist)
+                obj.put("folder", song.folder)
+                obj.put("folderIndex", song.folderIndex)
                 arr.put(obj)
             }
             context.getSharedPreferences(CACHE_FILE, Context.MODE_PRIVATE)
@@ -196,11 +206,17 @@ object MusicLibrary {
     }
 
     private fun scanMediaStore(context: Context): List<Song> {
-        val found = mutableListOf<Song>()
+        // (uri, title, artist, folder) - folderIndex isn't known yet here,
+        // since MediaStore returns rows title-first, not folder-grouped.
+        // Assigned in a second pass below, once every row for a given
+        // folder is known, same idea as the two SAF/raw-file scanners.
+        data class Raw(val uri: Uri, val title: String, val artist: String, val folder: String)
+        val found = mutableListOf<Raw>()
         val projection = arrayOf(
             MediaStore.Audio.Media._ID,
             MediaStore.Audio.Media.TITLE,
             MediaStore.Audio.Media.ARTIST,
+            MediaStore.Audio.Media.BUCKET_DISPLAY_NAME,
         )
         val selection = MediaStore.Audio.Media.IS_MUSIC + " != 0"
         val cursor = context.contentResolver.query(
@@ -211,13 +227,27 @@ object MusicLibrary {
             val idCol = it.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
             val titleCol = it.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
             val artistCol = it.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
+            // BUCKET_DISPLAY_NAME (the containing folder's name) is present
+            // on every API level this app supports, unlike RELATIVE_PATH
+            // (API 29+ only) - safe to read unconditionally.
+            val folderCol = it.getColumnIndex(MediaStore.Audio.Media.BUCKET_DISPLAY_NAME)
             while (it.moveToNext()) {
                 val id = it.getLong(idCol)
                 val uri = Uri.withAppendedPath(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id.toString())
-                found.add(Song(uri, it.getString(titleCol) ?: "Unknown", it.getString(artistCol) ?: ""))
+                val folder = if (folderCol >= 0) it.getString(folderCol) ?: "" else ""
+                found.add(Raw(uri, it.getString(titleCol) ?: "Unknown", it.getString(artistCol) ?: "", folder))
             }
         }
+        // Number each song by its position (alphabetical by title) within
+        // its own folder - matches how the two folder-tree scanners below
+        // number songs, so the "Song#" column means the same thing
+        // regardless of which source found the track.
         return found
+            .groupBy { it.folder }
+            .flatMap { (_, songsInFolder) ->
+                songsInFolder.sortedBy { it.title.lowercase() }
+                    .mapIndexed { i, raw -> Song(raw.uri, raw.title, raw.artist, raw.folder, i + 1) }
+            }
     }
 
     private val AUDIO_EXTENSIONS = setOf("mp3", "flac", "ogg", "wav", "m4a", "aac", "opus")
@@ -231,6 +261,12 @@ object MusicLibrary {
         val found = mutableListOf<Song>()
         var seen = 0
         fun walk(dir: DocumentFile) {
+            // Collected per-directory (not appended straight into `found`)
+            // so each song can be numbered by its alphabetical position
+            // within THIS folder specifically - the "Song#" list column -
+            // rather than some running total across the whole tree.
+            val folderName = dir.name ?: ""
+            val inThisFolder = mutableListOf<Pair<String, DocumentFile>>()
             for (child in dir.listFiles()) {
                 if (child.isDirectory) {
                     walk(child)
@@ -240,10 +276,12 @@ object MusicLibrary {
                     val name = child.name ?: continue
                     val ext = name.substringAfterLast('.', "").lowercase()
                     if (ext in AUDIO_EXTENSIONS) {
-                        val title = name.substringBeforeLast('.')
-                        found.add(Song(child.uri, title, ""))
+                        inThisFolder.add(name.substringBeforeLast('.') to child)
                     }
                 }
+            }
+            inThisFolder.sortedBy { it.first.lowercase() }.forEachIndexed { i, (title, doc) ->
+                found.add(Song(doc.uri, title, "", folderName, i + 1))
             }
         }
         walk(root)
@@ -262,6 +300,8 @@ object MusicLibrary {
         var seen = 0
         fun walk(dir: java.io.File) {
             val children = dir.listFiles() ?: return
+            // Same per-directory numbering approach as scanFolderTree above.
+            val inThisFolder = mutableListOf<Pair<String, java.io.File>>()
             for (child in children) {
                 if (child.isDirectory) {
                     walk(child)
@@ -270,10 +310,12 @@ object MusicLibrary {
                     if (seen % 200 == 0) onProgress?.invoke(seen)
                     val ext = child.name.substringAfterLast('.', "").lowercase()
                     if (ext in AUDIO_EXTENSIONS) {
-                        val title = child.name.substringBeforeLast('.')
-                        found.add(Song(Uri.fromFile(child), title, ""))
+                        inThisFolder.add(child.name.substringBeforeLast('.') to child)
                     }
                 }
+            }
+            inThisFolder.sortedBy { it.first.lowercase() }.forEachIndexed { i, (title, file) ->
+                found.add(Song(Uri.fromFile(file), title, "", dir.name, i + 1))
             }
         }
         walk(root)
