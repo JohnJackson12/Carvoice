@@ -20,4 +20,11 @@ data class Song(
     val artist: String = "",
     val folder: String = "",
     val folderIndex: Int = 0,
+    // A cover.jpg/folder.jpg/album.jpg (etc.) file sitting next to this
+    // song in its own folder, if one was found at scan time - see
+    // MusicLibrary.findFolderCoverArt(). Used by AlbumArt as a fallback
+    // when the song's own file has no embedded ID3/FLAC/MP4 picture frame,
+    // which is the common case for folders ripped without per-track art.
+    // Null for MediaStore-sourced songs (embedded art only there).
+    val coverUri: Uri? = null,
 )

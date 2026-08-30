@@ -39,11 +39,23 @@ object AlbumArt {
     private val noArtUris = mutableSetOf<String>()
 
     fun loadAsync(context: Context, uri: Uri?, onResult: (Bitmap?) -> Unit) {
-        if (uri == null) {
+        loadAsync(context, uri, null, onResult)
+    }
+
+    /** [fallbackUri] is a cover.jpg/folder.jpg-style image file found next
+     * to the song at scan time (see MusicLibrary.findFolderCoverArt) -
+     * tried only if [uri]'s own file has no embedded picture frame. Most
+     * folder-ripped libraries carry art this way rather than embedded per
+     * track, so this is what actually shows a real image instead of the
+     * placeholder icon for those. Cache key includes both URIs so a song
+     * that later gains real embedded art (edited tags, re-ripped file)
+     * isn't stuck showing a stale cached fallback result. */
+    fun loadAsync(context: Context, uri: Uri?, fallbackUri: Uri?, onResult: (Bitmap?) -> Unit) {
+        if (uri == null && fallbackUri == null) {
             onResult(null)
             return
         }
-        val key = uri.toString()
+        val key = "${uri ?: ""}|${fallbackUri ?: ""}"
         cache.get(key)?.let { onResult(it); return }
         if (key in noArtUris) {
             onResult(null)
@@ -51,7 +63,8 @@ object AlbumArt {
         }
         val appContext = context.applicationContext
         Thread {
-            val bitmap = load(appContext, uri)
+            val bitmap = (uri?.let { load(appContext, it) })
+                ?: fallbackUri?.let { loadFromImageFile(appContext, it) }
             if (bitmap != null) cache.put(key, bitmap) else synchronized(noArtUris) { noArtUris.add(key) }
             mainHandler.post { onResult(bitmap) }
         }.start()
@@ -67,6 +80,17 @@ object AlbumArt {
             null
         } finally {
             try { retriever.release() } catch (e: Exception) { /* already gone */ }
+        }
+    }
+
+    /** Decodes a plain image file (cover.jpg etc., not an audio file) via
+     * the content resolver so this works uniformly for both content://
+     * (SAF) and file:// (raw-folder) cover URIs. */
+    private fun loadFromImageFile(context: Context, uri: Uri): Bitmap? {
+        return try {
+            context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
+        } catch (e: Exception) {
+            null
         }
     }
 }

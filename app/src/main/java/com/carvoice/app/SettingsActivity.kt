@@ -137,6 +137,12 @@ class SettingsActivity : AppCompatActivity() {
             }
         })
 
+        val autoSkipIntroCheckbox = findViewById<android.widget.CheckBox>(R.id.autoSkipIntroCheckbox)
+        autoSkipIntroCheckbox.isChecked = Prefs.autoSkipIntro(this)
+        autoSkipIntroCheckbox.setOnCheckedChangeListener { _, checked ->
+            Prefs.setAutoSkipIntro(this, checked)
+        }
+
         val autoStartCheckbox = findViewById<android.widget.CheckBox>(R.id.autoStartCheckbox)
         autoStartCheckbox.isChecked = Prefs.autoStartOnBoot(this)
         autoStartCheckbox.setOnCheckedChangeListener { _, checked ->

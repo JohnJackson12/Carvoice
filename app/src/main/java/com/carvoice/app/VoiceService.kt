@@ -81,6 +81,14 @@ class VoiceService : Service(), RecognitionListener {
     private var focusRequest: AudioFocusRequest? = null
 
     private var trimEndSeconds = 0
+
+    // "Skip to vocals" (see VocalIntroDetector) - keyed by song uriKey so
+    // a song already analyzed this session (whether by the auto-skip
+    // setting or a manual voice command) doesn't get re-decoded every
+    // time it comes up again. A key present with a null value means
+    // "already tried, found nothing confident" - also not worth retrying.
+    private val introSecondsCache = mutableMapOf<String, Int?>()
+    private var introAnalysisRequestId = 0
     // SKIP: a single GLOBAL, live value - matches the Windows app's
     // config.json "skip_seconds" / Player.set_skip_seconds(). NOT a
     // relative fast-forward (that's what this used to be here, which
@@ -565,6 +573,74 @@ class VoiceService : Service(), RecognitionListener {
         nowPlayingCallback?.invoke(song.title, song.artist, mediaPlayer?.isPlaying ?: false)
         updateNotification(song.title)
         if (announce) speak(song.title)
+
+        if (Prefs.autoSkipIntro(this)) {
+            maybeAutoSkipIntro(uriKey, currentIndex)
+        }
+    }
+
+    /** Runs VocalIntroDetector for [uriKey] (or reuses a cached result from
+     * earlier this session) and, if it finds a confident guess, seeks past
+     * it - same as the manual "<wake> skip to vocals" command, just
+     * automatic. Guarded by [expectedIndex]/[introAnalysisRequestId] so a
+     * slow analysis for a song the user has since skipped away from can't
+     * land a late seek on whatever's playing by the time it finishes. */
+    private fun maybeAutoSkipIntro(uriKey: String, expectedIndex: Int) {
+        val cached = introSecondsCache[uriKey]
+        if (introSecondsCache.containsKey(uriKey)) {
+            if (cached != null) applyIntroSkip(uriKey, expectedIndex, cached)
+            return
+        }
+        val requestId = ++introAnalysisRequestId
+        val uri = MusicLibrary.all().getOrNull(expectedIndex)?.uri ?: return
+        VocalIntroDetector.detectIntroEndSeconds(this, uri) { seconds ->
+            introSecondsCache[uriKey] = seconds
+            if (requestId == introAnalysisRequestId && seconds != null) {
+                applyIntroSkip(uriKey, expectedIndex, seconds)
+            }
+        }
+    }
+
+    private fun applyIntroSkip(uriKey: String, expectedIndex: Int, seconds: Int) {
+        if (currentIndex != expectedIndex || currentUriKey() != uriKey) return  // moved on already
+        val mp = mediaPlayer ?: return
+        val savedFront = SongMetadataStore.trimFront(this, uriKey)
+        val startAt = maxOf(skipSeconds, savedFront, seconds)
+        try {
+            if (mp.currentPosition < startAt * 1000) mp.seekTo(startAt * 1000)
+        } catch (e: IllegalStateException) {
+            // MediaPlayer torn down between the analysis finishing and this landing - nothing to seek.
+        }
+    }
+
+    /** "<wake> skip to vocals" - one-off manual jump for whatever's
+     * playing RIGHT NOW, regardless of the auto-skip setting. Reuses a
+     * cached result if this song was already analyzed this session. */
+    private fun skipToVocalsForCurrentSong() {
+        val song = currentSong()
+        val uriKey = song?.uri?.toString()
+        if (song == null || uriKey == null) { speak("nothing playing"); return }
+        val expectedIndex = currentIndex
+        val cached = introSecondsCache[uriKey]
+        if (introSecondsCache.containsKey(uriKey)) {
+            if (cached != null) {
+                applyIntroSkip(uriKey, expectedIndex, cached)
+                speak("skipping the intro")
+            } else {
+                speak("couldn't find a clear intro to skip on this one")
+            }
+            return
+        }
+        speak("checking for an intro")
+        VocalIntroDetector.detectIntroEndSeconds(this, song.uri) { seconds ->
+            introSecondsCache[uriKey] = seconds
+            if (seconds != null) {
+                applyIntroSkip(uriKey, expectedIndex, seconds)
+                speak("skipping the intro")
+            } else {
+                speak("couldn't find a clear intro to skip on this one")
+            }
+        }
     }
 
     private fun speak(text: String) {
@@ -869,6 +945,7 @@ class VoiceService : Service(), RecognitionListener {
                 speak("trim set, ${cmd.frontSeconds} seconds from the start, ${cmd.endSeconds} from the end, saved")
             }
             is CommandParser.Command.PlaySong -> playSongByTitleKey(cmd.titleKey)
+            is CommandParser.Command.SkipToVocals -> skipToVocalsForCurrentSong()
             null -> { /* not a recognized command - ignore */ }
         }
     }

@@ -181,6 +181,30 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="20dp"
+            android:text="Skip to vocals (beta)"
+            android:textStyle="bold" />
+        <CheckBox
+            android:id="@+id/autoSkipIntroCheckbox"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Automatically skip the instrumental intro of every song" />
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="This is a loudness-based GUESS at where the intro ends, not real vocal detection (true vocal separation needs a heavy ML model this app doesn't run). It looks for the point a song's energy jumps up and stays up compared to its own quiet opening - works reasonably on a typical instrumental-intro-then-full-band song, and will guess wrong on others. Say &quot;skip to vocals&quot; (or &quot;skip intro&quot;) any time for a one-off manual jump on whatever's playing, regardless of this setting."
+            android:textSize="12sp"
+            android:textColor="?android:attr/textColorSecondary" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginTop="20dp"
+            android:background="?android:attr/listDivider" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
             android:text="Startup"
             android:textStyle="bold" />
         <CheckBox
@@ -235,7 +259,7 @@
             android:layout_marginTop="20dp"
             android:textSize="12sp"
             android:textColor="?android:attr/textColorSecondary"
-            android:text="Voice commands: play / pause / next / previous / status / play &lt;song name&gt; / skip 30 seconds (current song only, once) / skip all songs 30 seconds (global, same as the Skip setting above) / trim forty thirty / a number 1-5 for rating." />
+            android:text="Voice commands: play / pause / next / previous / status / play &lt;song name&gt; / skip 30 seconds (current song only, once) / skip all songs 30 seconds (global, same as the Skip setting above) / trim forty thirty / a number 1-5 for rating / skip to vocals (or &quot;skip intro&quot; - one-off jump past this song's guessed intro, see Skip to vocals above)." />
 
     </LinearLayout>
 </ScrollView>

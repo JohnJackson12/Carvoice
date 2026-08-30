@@ -1,6 +1,7 @@
 package com.carvoice.app
 
 import android.content.Context
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -86,6 +87,7 @@ object MusicLibrary {
             val loaded = mutableListOf<Song>()
             for (i in 0 until arr.length()) {
                 val obj = arr.getJSONObject(i)
+                val coverStr = obj.optString("coverUri", "")
                 loaded.add(
                     Song(
                         Uri.parse(obj.getString("uri")),
@@ -93,6 +95,7 @@ object MusicLibrary {
                         obj.getString("artist"),
                         obj.optString("folder", ""),
                         obj.optInt("folderIndex", 0),
+                        if (coverStr.isNotEmpty()) Uri.parse(coverStr) else null,
                     )
                 )
             }
@@ -119,6 +122,7 @@ object MusicLibrary {
                 obj.put("artist", song.artist)
                 obj.put("folder", song.folder)
                 obj.put("folderIndex", song.folderIndex)
+                obj.put("coverUri", song.coverUri?.toString() ?: "")
                 arr.put(obj)
             }
             context.getSharedPreferences(CACHE_FILE, Context.MODE_PRIVATE)
@@ -252,6 +256,76 @@ object MusicLibrary {
 
     private val AUDIO_EXTENSIONS = setOf("mp3", "flac", "ogg", "wav", "m4a", "aac", "opus")
 
+    // Filenames that conventionally carry a folder's album art when it
+    // isn't embedded in each individual track - matches what most
+    // ripping/download tools drop next to the audio files.
+    private val COVER_BASE_NAMES = setOf("cover", "folder", "album", "albumart", "front", "artwork")
+    private val COVER_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp")
+
+    /** Reads the ID3/FLAC/MP4 "artist" tag straight out of the file itself
+     * via MediaMetadataRetriever - real file I/O, only ever called from
+     * rescan()'s background thread. Folder-scanned songs used to get an
+     * empty artist ("" hardcoded, never actually looked at the file) -
+     * this is what actually populates it. Returns "" (never null/throws)
+     * on anything unreadable, so one bad/corrupt file can't take the rest
+     * of the scan down with it. */
+    private fun readArtistTag(context: Context, uri: Uri): String {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(context, uri)
+            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)?.trim() ?: ""
+        } catch (e: Exception) {
+            ""
+        } finally {
+            try { retriever.release() } catch (e: Exception) { /* already gone */ }
+        }
+    }
+
+    /** Same as above, for a plain filesystem path (scanRawFolderTree) -
+     * MediaMetadataRetriever can take a path string directly, no Context
+     * or content-resolver round trip needed for these. */
+    private fun readArtistTag(path: String): String {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(path)
+            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)?.trim() ?: ""
+        } catch (e: Exception) {
+            ""
+        } finally {
+            try { retriever.release() } catch (e: Exception) { /* already gone */ }
+        }
+    }
+
+    /** Looks for a common "cover art" image file (cover.jpg, folder.jpg,
+     * album.png, etc.) sitting next to the songs in [dir] - the usual way
+     * a folder-ripped library carries album art when it isn't embedded in
+     * each track's own tags (AlbumArt tries embedded art first, and falls
+     * back to this). Computed once per folder, not once per song, since
+     * every song in the same folder shares the same answer. */
+    private fun findFolderCoverArt(dir: DocumentFile): Uri? {
+        return try {
+            dir.listFiles().firstOrNull { child -> !child.isDirectory && isCoverArtFileName(child.name) }?.uri
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun findFolderCoverArt(dir: java.io.File): Uri? {
+        return try {
+            dir.listFiles()?.firstOrNull { child -> child.isFile && isCoverArtFileName(child.name) }
+                ?.let { Uri.fromFile(it) }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun isCoverArtFileName(name: String?): Boolean {
+        if (name == null) return false
+        val base = name.substringBeforeLast('.', name).lowercase()
+        val ext = name.substringAfterLast('.', "").lowercase()
+        return ext in COVER_EXTENSIONS && base in COVER_BASE_NAMES
+    }
+
     private fun scanFolderTree(context: Context, treeUri: Uri, onProgress: ((Int) -> Unit)? = null): List<Song> {
         // DocumentFile.listFiles() is one IPC round-trip per directory (SAF
         // has no bulk recursive query), so a deep tree with many folders
@@ -280,8 +354,11 @@ object MusicLibrary {
                     }
                 }
             }
+            if (inThisFolder.isEmpty()) return
+            val coverUri = findFolderCoverArt(dir)
             inThisFolder.sortedBy { it.first.lowercase() }.forEachIndexed { i, (title, doc) ->
-                found.add(Song(doc.uri, title, "", folderName, i + 1))
+                val artist = readArtistTag(context, doc.uri)
+                found.add(Song(doc.uri, title, artist, folderName, i + 1, coverUri))
             }
         }
         walk(root)
@@ -314,8 +391,11 @@ object MusicLibrary {
                     }
                 }
             }
+            if (inThisFolder.isEmpty()) return
+            val coverUri = findFolderCoverArt(dir)
             inThisFolder.sortedBy { it.first.lowercase() }.forEachIndexed { i, (title, file) ->
-                found.add(Song(Uri.fromFile(file), title, "", dir.name, i + 1))
+                val artist = readArtistTag(file.absolutePath)
+                found.add(Song(Uri.fromFile(file), title, artist, dir.name, i + 1, coverUri))
             }
         }
         walk(root)

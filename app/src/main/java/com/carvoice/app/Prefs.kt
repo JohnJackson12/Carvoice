@@ -95,4 +95,16 @@ object Prefs {
             .putInt(KEY_LAST_POSITION_MS, positionMs)
             .apply()
     }
+
+    /** Off by default - a loudness-based GUESS at where a song's
+     * instrumental intro ends (see VocalIntroDetector), not real vocal
+     * detection. When on, every song that starts playing gets analyzed in
+     * the background and auto-seeked past its guessed intro if one was
+     * found with reasonable confidence; "<wake> skip to vocals" always
+     * works regardless of this setting, for a one-off manual jump on
+     * whatever's playing right now. */
+    private const val KEY_AUTO_SKIP_INTRO = "auto_skip_intro"
+    fun autoSkipIntro(context: Context): Boolean = prefs(context).getBoolean(KEY_AUTO_SKIP_INTRO, false)
+    fun setAutoSkipIntro(context: Context, value: Boolean) =
+        prefs(context).edit().putBoolean(KEY_AUTO_SKIP_INTRO, value).apply()
 }

@@ -335,13 +335,13 @@ class MainActivity : AppCompatActivity() {
         val current = svc?.currentSong()
         val upNext = svc?.peekNext()
         nowPlayingArt?.let { iv ->
-            AlbumArt.loadAsync(this, current?.uri) { bitmap ->
+            AlbumArt.loadAsync(this, current?.uri, current?.coverUri) { bitmap ->
                 if (bitmap != null) iv.setImageBitmap(bitmap)
                 else iv.setImageResource(android.R.drawable.ic_media_play)
             }
         }
         upNextArt?.let { iv ->
-            AlbumArt.loadAsync(this, upNext?.uri) { bitmap ->
+            AlbumArt.loadAsync(this, upNext?.uri, upNext?.coverUri) { bitmap ->
                 if (bitmap != null) iv.setImageBitmap(bitmap)
                 else iv.setImageResource(android.R.drawable.ic_media_next)
             }

@@ -22,6 +22,14 @@ object CommandParser {
     private val NUMBER_WORDS = mapOf("one" to 1, "two" to 2, "three" to 3, "four" to 4,
         "five" to 5, "six" to 6, "seven" to 7, "eight" to 8, "nine" to 9, "ten" to 10)
 
+    // "<wake> skip to vocals" mode (see VocalIntroDetector): jumps past
+    // whatever the app guesses is the instrumental intro, for the song
+    // playing right now. Several equivalent phrasings recognized, all
+    // mapped to the same Command.SkipToVocals.
+    private val VOCAL_SKIP_PHRASES = listOf(
+        "skip to vocals", "skip intro", "skip music", "vocals only", "skip the intro",
+    )
+
     /** Every phrase that should trigger listening: the wake word and each
      * alias, each usable bare or with "hey" in front - so "sam" and "hey
      * sam" both work interchangeably. Longest-first so a prefix match
@@ -68,17 +76,32 @@ object CommandParser {
                 phrases.add("$wake $cmd")
             }
             for ((seconds, word) in SKIP_WORDS) {
+                // Both the numeral ("30") and spelled-out ("thirty") forms
+                // of the number, each bare AND each followed by "seconds"
+                // - the Settings screen's own help text tells people to
+                // say "skip 30 seconds" / "skip all songs 30 seconds"
+                // (numeral + literal "seconds"), but that exact combo was
+                // missing from this grammar before, so Vosk (which can
+                // only ever output a phrase that's actually in this list)
+                // had no valid match for it and the command silently
+                // failed. This is the fix for that.
                 phrases.add("$wake skip $word")
                 phrases.add("$wake skip $seconds")
                 phrases.add("$wake skip $word seconds")
+                phrases.add("$wake skip $seconds seconds")
                 phrases.add("$wake skip all songs $word")
                 phrases.add("$wake skip all songs $seconds")
                 phrases.add("$wake skip all songs $word seconds")
+                phrases.add("$wake skip all songs $seconds seconds")
             }
             for (m in MINUTE_STEPS) {
                 val word = NUMBER_WORDS.entries.firstOrNull { it.value == m }?.key ?: m.toString()
-                phrases.add("$wake skip $word minute" + if (m != 1) "s" else "")
-                phrases.add("$wake skip all songs $word minute" + if (m != 1) "s" else "")
+                val suffix = if (m != 1) "s" else ""
+                // Same numeral-form gap as above, for the minute steps.
+                phrases.add("$wake skip $word minute$suffix")
+                phrases.add("$wake skip $m minute$suffix")
+                phrases.add("$wake skip all songs $word minute$suffix")
+                phrases.add("$wake skip all songs $m minute$suffix")
             }
             for (front in TRIM_STEPS) for (end in TRIM_STEPS) {
                 if (front != 0 || end != 0) {
@@ -90,6 +113,10 @@ object CommandParser {
                 phrases.add("$wake $word")
                 phrases.add("$wake $n")
             }
+            // "Skip to vocals" mode - see VocalIntroDetector. A handful of
+            // equivalent phrasings so the exact wording doesn't have to be
+            // memorized; all map to the same Command.SkipToVocals below.
+            for (phrase in VOCAL_SKIP_PHRASES) phrases.add("$wake $phrase")
             for (titleKey in songTitleKeys) phrases.add("$wake play $titleKey")
         }
         phrases.add("[unk]")
@@ -103,6 +130,7 @@ object CommandParser {
         data class SkipAllSongs(val seconds: Int) : Command()     // GLOBAL setting, all songs current+future
         data class Trim(val frontSeconds: Int, val endSeconds: Int) : Command()
         data class PlaySong(val titleKey: String) : Command()
+        object SkipToVocals : Command()   // jump past the (guessed) instrumental intro of the current song
     }
 
     /** remainder = whatever came after the matched wake phrase, already
@@ -112,6 +140,7 @@ object CommandParser {
         if (remainder.isBlank()) return null
         val simple = setOf("delete", "undo", "next", "previous", "pause", "play", "status")
         if (remainder in simple) return Command.Simple(remainder)
+        if (remainder in VOCAL_SKIP_PHRASES) return Command.SkipToVocals
 
         if (remainder.startsWith("play ") && songTitleKeys.isNotEmpty()) {
             val key = remainder.removePrefix("play ").trim()
