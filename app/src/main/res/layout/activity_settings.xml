@@ -259,7 +259,7 @@
             android:layout_marginTop="20dp"
             android:textSize="12sp"
             android:textColor="?android:attr/textColorSecondary"
-            android:text="Voice commands: play / pause / next / previous / status / play &lt;song name&gt; / skip 30 seconds (current song only, once) / skip all songs 30 seconds (global, same as the Skip setting above) / trim forty thirty / a number 1-5 for rating / skip to vocals (or &quot;skip intro&quot; - one-off jump past this song's guessed intro, see Skip to vocals above)." />
+            android:text="Voice commands: play / pause / next / previous / status / play &lt;song name&gt; / skip 30 seconds (current song only, once) / skip all songs 30 seconds (global, same as the Skip setting above) / trim forty thirty / a number 1-5 for rating (for MP3/FLAC, also written into the file's own tag - visible in other players too) / skip to vocals (or &quot;skip intro&quot; - one-off jump past this song's guessed intro, see Skip to vocals above)." />
 
     </LinearLayout>
 </ScrollView>

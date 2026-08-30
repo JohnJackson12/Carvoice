@@ -726,6 +726,19 @@ class VoiceService : Service(), RecognitionListener {
         val uriKey = currentUriKey() ?: return
         SongMetadataStore.setRating(this, uriKey, value)
         ratingCallback?.invoke(value)
+
+        // Also written into the actual audio file's own tag (ID3 POPM /
+        // FLAC Vorbis Comment - see AudioTagWriter) so any other
+        // app/player that reads standard tags sees the same rating, not
+        // just this one. Real file I/O - off the calling thread, and
+        // best-effort: SongMetadataStore above is already saved and is
+        // what this app itself always reads from, so a failed/unsupported
+        // file write here doesn't affect the app's own behavior at all.
+        val uri = currentSong()?.uri
+        if (uri != null) {
+            val appContext = applicationContext
+            Thread { AudioTagWriter.writeRating(appContext, uri, value) }.start()
+        }
     }
 
     fun currentRating(): Int {

@@ -141,9 +141,18 @@ object MusicLibrary {
      * folder, instead of silently pulling in every audio file on the
      * device).
      *
-     * This does real disk/SAF I/O and can take a while for a large,
-     * multi-folder library - ALWAYS call this from a background thread,
-     * never from onCreate()/UI code directly.
+     * Two phases, both still on whatever background thread the caller
+     * used to call rescan() itself (never the main thread):
+     *   1. FAST - just enumerates files and titles (what folder listing
+     *      alone already gives you, no per-file I/O) and publishes that
+     *      immediately - titles/browsing/playback are usable right away.
+     *   2. SLOWER, runs right after - reads each song's actual artist tag
+     *      (real per-file I/O, this is the part that used to make the
+     *      whole scan feel slow) and republishes incrementally as it
+     *      goes, so artists visibly fill in afterward instead of the
+     *      whole song list staying invisible until every tag is read.
+     * Cover art doesn't need its own phase - see pickBestCoverArtFromNames's
+     * comment for why it's effectively free and gets included in phase 1.
      *
      * progressCb(filesSeen, songsAdded), if given, is called periodically
      * during a folder scan (matches the Windows app's scan(progress_cb=))
@@ -154,6 +163,7 @@ object MusicLibrary {
     fun rescan(context: Context, progressCb: ((seen: Int, added: Int) -> Unit)? = null) {
         try {
             val result = mutableListOf<Song>()
+            val toEnrich = mutableListOf<PendingArtist>()
             if (Prefs.useWholeDeviceLibrary(context)) {
                 try {
                     result.addAll(scanMediaStore(context))
@@ -171,7 +181,7 @@ object MusicLibrary {
             for (uriString in Prefs.folderUris(context)) {
                 try {
                     val folderSongs = if (uriString.startsWith("content://")) {
-                        scanFolderTree(context, Uri.parse(uriString)) { s ->
+                        scanFolderTree(context, Uri.parse(uriString), toEnrich) { s ->
                             seen = s
                             progressCb?.invoke(seen, result.size)
                         }
@@ -179,7 +189,7 @@ object MusicLibrary {
                         // A plain absolute path, added via
                         // FolderBrowserActivity's in-app browser (used on
                         // devices with no OS folder-picker app at all).
-                        scanRawFolderTree(java.io.File(uriString)) { s ->
+                        scanRawFolderTree(java.io.File(uriString), toEnrich) { s ->
                             seen = s
                             progressCb?.invoke(seen, result.size)
                         }
@@ -197,15 +207,55 @@ object MusicLibrary {
             songs.addAll(deduped)
             saveCache(context)
             progressCb?.invoke(seen, deduped.size)
-            // Listeners often touch a MediaPlayer or a View - always hand
-            // that off to the main thread, regardless of which thread called
-            // rescan() (Settings' button already uses a background thread;
-            // VoiceService's startup rescan does too).
+            // PHASE 1 published - titles/cover art/browsing/playback all
+            // usable now. Listeners often touch a MediaPlayer or a View -
+            // always hand that off to the main thread, regardless of
+            // which thread called rescan().
             mainHandler.post { listeners.forEach { it() } }
+
+            enrichArtists(context, toEnrich)
         } catch (e: Exception) {
             // Last-resort net for this whole function - whatever wasn't
             // already caught above still must never take the app down.
             CrashLog.record(context, "MusicLibrary.rescan failed: ${e}")
+        }
+    }
+
+    /** What phase 2 needs to go read one song's real artist tag - either
+     * a SAF document (needs Context + Uri) or a plain filesystem path. */
+    private sealed class PendingArtist {
+        abstract val uriKey: String
+        data class Saf(val uri: Uri) : PendingArtist() { override val uriKey get() = uri.toString() }
+        data class Raw(val path: String, val uri: Uri) : PendingArtist() { override val uriKey get() = uri.toString() }
+    }
+
+    /** Phase 2 - reads each pending song's real artist tag (the slow,
+     * per-file I/O part) and republishes into `songs` incrementally, so a
+     * large library's artists visibly fill in over a few seconds rather
+     * than the whole scan being invisible until the very last file is
+     * read. Batched (every 40 songs, not every single one) so this isn't
+     * hammering the main thread / disk with a notification+save per file. */
+    private fun enrichArtists(context: Context, pending: List<PendingArtist>) {
+        if (pending.isEmpty()) return
+        var sinceLastPublish = 0
+        for (item in pending) {
+            val artist = when (item) {
+                is PendingArtist.Saf -> readArtistTag(context, item.uri)
+                is PendingArtist.Raw -> readArtistTag(item.path)
+            }
+            if (artist.isEmpty()) continue  // nothing to update - leave the placeholder "" as-is
+            val idx = songs.indexOfFirst { it.uri.toString() == item.uriKey }
+            if (idx >= 0) songs[idx] = songs[idx].copy(artist = artist)
+            sinceLastPublish++
+            if (sinceLastPublish >= 40) {
+                sinceLastPublish = 0
+                saveCache(context)
+                mainHandler.post { listeners.forEach { it() } }
+            }
+        }
+        if (sinceLastPublish > 0) {
+            saveCache(context)
+            mainHandler.post { listeners.forEach { it() } }
         }
     }
 
@@ -257,9 +307,13 @@ object MusicLibrary {
     private val AUDIO_EXTENSIONS = setOf("mp3", "flac", "ogg", "wav", "m4a", "aac", "opus")
 
     // Filenames that conventionally carry a folder's album art when it
-    // isn't embedded in each individual track - matches what most
-    // ripping/download tools drop next to the audio files.
-    private val COVER_BASE_NAMES = setOf("cover", "folder", "album", "albumart", "front", "artwork")
+    // isn't embedded in each individual track. Matched as a SUBSTRING
+    // (case-insensitive), not an exact name - real-world rips use all
+    // sorts of variations ("Folder.jpg", "AlbumArtSmall.jpg", "01 -
+    // Cover.jpg"), and an exact-name-only check was missing almost all of
+    // them, which is why art kept showing up blank even for folders that
+    // clearly had a cover image sitting right there.
+    private val COVER_KEYWORDS = listOf("cover", "folder", "album", "front", "artwork", "art")
     private val COVER_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp")
 
     /** Reads the ID3/FLAC/MP4 "artist" tag straight out of the file itself
@@ -296,37 +350,37 @@ object MusicLibrary {
         }
     }
 
-    /** Looks for a common "cover art" image file (cover.jpg, folder.jpg,
-     * album.png, etc.) sitting next to the songs in [dir] - the usual way
-     * a folder-ripped library carries album art when it isn't embedded in
-     * each track's own tags (AlbumArt tries embedded art first, and falls
-     * back to this). Computed once per folder, not once per song, since
-     * every song in the same folder shares the same answer. */
-    private fun findFolderCoverArt(dir: DocumentFile): Uri? {
-        return try {
-            dir.listFiles().firstOrNull { child -> !child.isDirectory && isCoverArtFileName(child.name) }?.uri
-        } catch (e: Exception) {
-            null
+    /** Picks the folder's cover art out of a listing you ALREADY have in
+     * hand (the same dir.listFiles()/File.listFiles() call the walk below
+     * already made to find the audio files) - not a second directory
+     * query. Cover-art detection used to call dir.listFiles() again by
+     * itself, which was a second, entirely avoidable IPC round-trip (for
+     * SAF folders) on every single folder in the scan for no reason. */
+    private fun pickBestCoverArtFromNames(images: List<Pair<String, Uri>>): Uri? {
+        if (images.isEmpty()) return null
+        val keywordMatch = images.firstOrNull { (name, _) ->
+            val base = name.substringBeforeLast('.', name).lowercase()
+            COVER_KEYWORDS.any { kw -> base.contains(kw) }
         }
+        if (keywordMatch != null) return keywordMatch.second
+        // No obviously-named cover file, but if there's exactly one image
+        // in the folder at all, it's almost certainly the cover - don't
+        // guess among several unrelated images (liner notes, band photos),
+        // but a lone image next to a batch of tracks isn't a coincidence.
+        return if (images.size == 1) images[0].second else null
     }
 
-    private fun findFolderCoverArt(dir: java.io.File): Uri? {
-        return try {
-            dir.listFiles()?.firstOrNull { child -> child.isFile && isCoverArtFileName(child.name) }
-                ?.let { Uri.fromFile(it) }
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    private fun isCoverArtFileName(name: String?): Boolean {
+    private fun isImageFileName(name: String?): Boolean {
         if (name == null) return false
-        val base = name.substringBeforeLast('.', name).lowercase()
-        val ext = name.substringAfterLast('.', "").lowercase()
-        return ext in COVER_EXTENSIONS && base in COVER_BASE_NAMES
+        return name.substringAfterLast('.', "").lowercase() in COVER_EXTENSIONS
     }
 
-    private fun scanFolderTree(context: Context, treeUri: Uri, onProgress: ((Int) -> Unit)? = null): List<Song> {
+    private fun scanFolderTree(
+        context: Context,
+        treeUri: Uri,
+        toEnrich: MutableList<PendingArtist>,
+        onProgress: ((Int) -> Unit)? = null,
+    ): List<Song> {
         // DocumentFile.listFiles() is one IPC round-trip per directory (SAF
         // has no bulk recursive query), so a deep tree with many folders
         // is inherently slow - this is exactly why rescan() must never run
@@ -341,6 +395,7 @@ object MusicLibrary {
             // rather than some running total across the whole tree.
             val folderName = dir.name ?: ""
             val inThisFolder = mutableListOf<Pair<String, DocumentFile>>()
+            val imagesInFolder = mutableListOf<Pair<String, Uri>>()
             for (child in dir.listFiles()) {
                 if (child.isDirectory) {
                     walk(child)
@@ -351,14 +406,19 @@ object MusicLibrary {
                     val ext = name.substringAfterLast('.', "").lowercase()
                     if (ext in AUDIO_EXTENSIONS) {
                         inThisFolder.add(name.substringBeforeLast('.') to child)
+                    } else if (isImageFileName(name)) {
+                        imagesInFolder.add(name to child.uri)
                     }
                 }
             }
             if (inThisFolder.isEmpty()) return
-            val coverUri = findFolderCoverArt(dir)
+            val coverUri = pickBestCoverArtFromNames(imagesInFolder)
             inThisFolder.sortedBy { it.first.lowercase() }.forEachIndexed { i, (title, doc) ->
-                val artist = readArtistTag(context, doc.uri)
-                found.add(Song(doc.uri, title, artist, folderName, i + 1, coverUri))
+                // Artist left blank here on purpose - phase 1 is titles-only
+                // for speed; MusicLibrary.enrichArtists() fills it in right
+                // after, from `toEnrich`, without a second directory walk.
+                found.add(Song(doc.uri, title, "", folderName, i + 1, coverUri))
+                toEnrich.add(PendingArtist.Saf(doc.uri))
             }
         }
         walk(root)
@@ -372,13 +432,18 @@ object MusicLibrary {
      * DocumentFile/IPC) do the walking. Only reachable at all because
      * MANAGE_EXTERNAL_STORAGE was granted before that folder could be
      * picked in the first place - see FolderBrowserActivity. */
-    private fun scanRawFolderTree(root: java.io.File, onProgress: ((Int) -> Unit)? = null): List<Song> {
+    private fun scanRawFolderTree(
+        root: java.io.File,
+        toEnrich: MutableList<PendingArtist>,
+        onProgress: ((Int) -> Unit)? = null,
+    ): List<Song> {
         val found = mutableListOf<Song>()
         var seen = 0
         fun walk(dir: java.io.File) {
             val children = dir.listFiles() ?: return
             // Same per-directory numbering approach as scanFolderTree above.
             val inThisFolder = mutableListOf<Pair<String, java.io.File>>()
+            val imagesInFolder = mutableListOf<Pair<String, Uri>>()
             for (child in children) {
                 if (child.isDirectory) {
                     walk(child)
@@ -388,14 +453,17 @@ object MusicLibrary {
                     val ext = child.name.substringAfterLast('.', "").lowercase()
                     if (ext in AUDIO_EXTENSIONS) {
                         inThisFolder.add(child.name.substringBeforeLast('.') to child)
+                    } else if (isImageFileName(child.name)) {
+                        imagesInFolder.add(child.name to Uri.fromFile(child))
                     }
                 }
             }
             if (inThisFolder.isEmpty()) return
-            val coverUri = findFolderCoverArt(dir)
+            val coverUri = pickBestCoverArtFromNames(imagesInFolder)
             inThisFolder.sortedBy { it.first.lowercase() }.forEachIndexed { i, (title, file) ->
-                val artist = readArtistTag(file.absolutePath)
-                found.add(Song(Uri.fromFile(file), title, artist, dir.name, i + 1, coverUri))
+                val uri = Uri.fromFile(file)
+                found.add(Song(uri, title, "", dir.name, i + 1, coverUri))
+                toEnrich.add(PendingArtist.Raw(file.absolutePath, uri))
             }
         }
         walk(root)
