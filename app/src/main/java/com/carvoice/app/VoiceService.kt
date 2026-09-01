@@ -22,7 +22,6 @@ import org.json.JSONObject
 import org.vosk.Model
 import org.vosk.Recognizer
 import org.vosk.android.RecognitionListener
-import org.vosk.android.SpeechService
 import org.vosk.android.StorageService
 import java.util.Locale
 
@@ -65,7 +64,7 @@ class VoiceService : Service(), RecognitionListener {
         var consentResolver: ((SongDeleter.Outcome.NeedsConsent, (SongDeleter.Outcome) -> Unit) -> Unit)? = null
     }
 
-    private var speechService: SpeechService? = null
+    private var speechService: MicCapture? = null
     private var tts: TextToSpeech? = null
     private var mediaPlayer: MediaPlayer? = null
     private var currentIndex = -1
@@ -306,7 +305,9 @@ class VoiceService : Service(), RecognitionListener {
                 val recognizer = Recognizer(model, 16000.0f, grammar)
                 speechService?.stop()
                 speechService?.shutdown()
-                speechService = SpeechService(recognizer, 16000.0f)
+                speechService = MicCapture(recognizer, 16000.0f).apply {
+                    setGain(Prefs.micSensitivity(this@VoiceService))
+                }
                 speechService?.startListening(this)
                 loadedModel = model
             } catch (e: Exception) {
@@ -655,6 +656,16 @@ class VoiceService : Service(), RecognitionListener {
 
     fun currentVolume(): Float = baseVolume
 
+    /** Live mic-gain update from the Settings slider - applies to the very
+     * next audio chunk (see MicCapture.setGain), so no listener restart is
+     * needed to feel the change. Falls back to just saving the preference
+     * when the recognizer isn't up yet (e.g. Settings opened during the
+     * first-run model unpack); startRecognizer() reads it fresh anyway. */
+    fun setMicSensitivity(multiplier: Float) {
+        Prefs.setMicSensitivity(this, multiplier)
+        speechService?.setGain(multiplier)
+    }
+
     fun play() {
         mediaPlayer?.start()
         nowPlayingCallback?.invoke(currentTitle(), currentArtist(), true)
@@ -767,6 +778,41 @@ class VoiceService : Service(), RecognitionListener {
         return SongMetadataStore.trimFront(this, uriKey) to SongMetadataStore.trimEnd(this, uriKey)
     }
 
+    /** The DESTRUCTIVE counterpart to [setTrim]: actually cuts the current
+     * song's saved trim points out of its own file and overwrites it (see
+     * AudioTrimmer) - shared by the GUI's scissors button and the voice
+     * "<wake> apply trim" command so both can never disagree about what
+     * "apply" does. Runs the real file I/O off the main thread; [onDone]
+     * is always called back on the main thread. Resets the now-obsolete
+     * playback-time trim to 0/0 on success (the seconds are physically
+     * gone from the file now, so skipping them on top of that would cut
+     * the song twice) and reloads the track from the now-shorter file. */
+    fun applyRealTrim(onDone: (success: Boolean, message: String) -> Unit) {
+        val song = currentSong()
+        if (song == null) { onDone(false, "nothing loaded to trim"); return }
+        val (front, end) = currentTrim()
+        if (front <= 0 && end <= 0) { onDone(false, "no trim points set - drag the dots on the seek bar first"); return }
+        val appContext = applicationContext
+        val wasPlaying = mediaPlayer?.isPlaying ?: false
+        Thread {
+            val result = AudioTrimmer.trim(appContext, song.uri, front, end)
+            progressHandler.post {
+                when (result) {
+                    is AudioTrimmer.Result.Success -> {
+                        SongMetadataStore.clearTrim(this, song.uri.toString())
+                        if (currentSong()?.uri == song.uri) {
+                            loadCurrentTrack(announce = false)
+                            if (wasPlaying) mediaPlayer?.start()
+                        }
+                        onDone(true, "trim applied, saved to the file")
+                    }
+                    is AudioTrimmer.Result.Unsupported -> onDone(false, result.reason)
+                    is AudioTrimmer.Result.Failed -> onDone(false, result.message)
+                }
+            }
+        }.start()
+    }
+
     private fun status() = speak(currentTitle().ifBlank { "nothing loaded" })
 
     /** SKIP: sets the GLOBAL live start-position (seconds) applied to
@@ -875,6 +921,21 @@ class VoiceService : Service(), RecognitionListener {
         }
     }
 
+    /** "<wake> apply trim" - the voice path to the same destructive,
+     * file-overwriting cut the scissors button triggers (see
+     * VoiceService.applyRealTrim). Deliberately requires the trim points
+     * to already be set (by dragging the dots, or a prior "<wake> trim"
+     * voice command) rather than taking seconds inline - "apply" cuts
+     * whatever's currently previewed, it doesn't invent new trim points. */
+    private fun voiceApplyTrim() {
+        val song = currentSong()
+        val label = if (song != null && song.artist.isNotBlank()) "\"${song.title}\" by ${song.artist}" else song?.let { "\"${it.title}\"" } ?: "the current song"
+        applyRealTrim { success, message ->
+            speak(message)
+            log(if (success) "Trim applied to $label - file overwritten" else "Trim not applied to $label: $message")
+        }
+    }
+
     private fun playSongByTitleKey(titleKey: String) {
         val idx = MusicLibrary.all().indexOfFirst { TitleNormalizer.normalize(it.title) == titleKey }
         if (idx == -1) { speak("couldn't find that song"); return }
@@ -935,6 +996,7 @@ class VoiceService : Service(), RecognitionListener {
                 "status" -> status()
                 "delete" -> voiceDeleteCurrentSong()
                 "undo" -> voiceUndo()
+                "apply trim" -> voiceApplyTrim()
             }
             is CommandParser.Command.Rate -> {
                 setRating(cmd.value)

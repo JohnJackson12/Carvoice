@@ -91,6 +91,27 @@ class SettingsActivity : AppCompatActivity() {
             Toast.makeText(this, "Wake words updated", Toast.LENGTH_SHORT).show()
         }
 
+        // Mic sensitivity: SeekBar progress 0-90 maps to a 1.0x-10.0x gain
+        // multiplier in 0.1 steps (progress/10f + 1.0f) - see
+        // MicCapture.setGain / Prefs.micSensitivity.
+        val micSeekBar = findViewById<android.widget.SeekBar>(R.id.micSensitivitySeekBar)
+        val micLabel = findViewById<TextView>(R.id.micSensitivityLabel)
+        val initialMic = Prefs.micSensitivity(this)
+        micSeekBar.progress = ((initialMic - 1f) * 10).toInt().coerceIn(0, 90)
+        micLabel.text = String.format("%.1fx", initialMic)
+        micSeekBar.setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: android.widget.SeekBar?, progress: Int, fromUser: Boolean) {
+                val multiplier = 1f + progress / 10f
+                micLabel.text = String.format("%.1fx", multiplier)
+                if (fromUser) {
+                    VoiceService.instance?.setMicSensitivity(multiplier)
+                        ?: Prefs.setMicSensitivity(this@SettingsActivity, multiplier)
+                }
+            }
+            override fun onStartTrackingTouch(sb: android.widget.SeekBar?) {}
+            override fun onStopTrackingTouch(sb: android.widget.SeekBar?) {}
+        })
+
         findViewById<Button>(R.id.addFolderButton).setOnClickListener {
             addFolderClicked()
         }

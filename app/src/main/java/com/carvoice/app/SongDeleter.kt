@@ -3,6 +3,7 @@ package com.carvoice.app
 import android.app.RecoverableSecurityException
 import android.content.Context
 import android.content.IntentSender
+import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import androidx.documentfile.provider.DocumentFile
@@ -129,17 +130,55 @@ object SongDeleter {
     fun delete(context: Context, song: Song): Outcome =
         if (song.uri.scheme == "file") deleteRawFile(context, song) else deleteContentUri(context, song)
 
+    /** Moves [src] to [dest], working across filesystem boundaries.
+     * File.renameTo() is a plain filesystem rename - it FAILS (returns
+     * false, throws nothing) whenever the two paths aren't on the same
+     * physical volume, which is exactly the common case here: the app's
+     * own trash folder (getExternalFilesDir) lives on the device's
+     * internal/emulated storage, while most car-stereo music actually
+     * lives on a USB stick or SD card - a different mount entirely. That
+     * silent, no-exception failure is what used to surface as "the file
+     * may be read-only" for a file that wasn't read-only at all. This
+     * falls back to a real copy + delete-original whenever the fast
+     * rename path doesn't work. */
+    private fun moveAcrossFilesystems(src: File, dest: File): Boolean {
+        if (src.renameTo(dest)) return true
+        return try {
+            src.inputStream().use { input ->
+                dest.outputStream().use { output -> input.copyTo(output) }
+            }
+            if (src.delete()) {
+                true
+            } else {
+                // Copied but couldn't remove the original - don't leave two
+                // copies of the song sitting around silently.
+                dest.delete()
+                false
+            }
+        } catch (e: Exception) {
+            dest.delete()
+            false
+        }
+    }
+
     private fun deleteRawFile(context: Context, song: Song): Outcome {
         val path = song.uri.path ?: return Outcome.Failed("Couldn't delete - no file path")
         val src = File(path)
         if (!src.exists()) return Outcome.Failed("Couldn't delete - the file is already gone")
         val dest = File(appTrashDir(context), "${System.currentTimeMillis()}_${src.name}")
         return try {
-            if (src.renameTo(dest)) {
+            if (moveAcrossFilesystems(src, dest)) {
                 trashedStack.add(Trashed(song, dest.absolutePath))
                 Outcome.Done(song, undoable = true)
+            } else if (src.delete()) {
+                // Couldn't move it to the trash folder at all (e.g. the
+                // trash folder's own volume is full, or is itself
+                // unwritable) - still honor the actual delete request
+                // rather than leaving the song stuck forever. Permanent:
+                // there's nowhere it was safely relocated to.
+                Outcome.Done(song, undoable = false)
             } else {
-                Outcome.Failed("Couldn't delete - the file may be read-only")
+                Outcome.Failed("Couldn't delete - the file may be read-only or the storage is unwritable")
             }
         } catch (e: Exception) {
             Outcome.Failed(e.message ?: "Couldn't delete")
@@ -182,7 +221,7 @@ object SongDeleter {
 
         return try {
             val rows = resolver.delete(song.uri, null, null)
-            if (rows > 0) Outcome.Done(song, undoable = false)
+            if (rows > 0 || directFileDeleteFallback(context, song.uri)) Outcome.Done(song, undoable = false)
             else Outcome.Failed("Couldn't delete - the file may be read-only or already gone")
         } catch (e: RecoverableSecurityException) {
             Outcome.NeedsConsent(e.userAction.actionIntent.intentSender) { approved ->
@@ -192,13 +231,53 @@ object SongDeleter {
                     // The retry this whole file exists for - see the class
                     // doc's API-29 branch above.
                     val retried = try { resolver.delete(song.uri, null, null) } catch (e2: Exception) { 0 }
-                    if (retried > 0) Outcome.Done(song, undoable = false)
+                    if (retried > 0 || directFileDeleteFallback(context, song.uri)) Outcome.Done(song, undoable = false)
                     else Outcome.Failed("Couldn't delete - the file may be read-only or already gone")
                 }
             }
         } catch (e: Exception) {
-            Outcome.Failed(e.message ?: "Couldn't delete")
+            if (directFileDeleteFallback(context, song.uri)) Outcome.Done(song, undoable = false)
+            else Outcome.Failed(e.message ?: "Couldn't delete")
         }
+    }
+
+    /** Last resort for exactly the "may be read-only" symptom on real API
+     * 29 hardware: some OEM MediaProvider implementations (common on
+     * generic/aftermarket car head units) either never throw
+     * RecoverableSecurityException the way stock Android's does, or throw
+     * it, get consent, and STILL no-op the actual delete() afterward - the
+     * request completes with 0 rows changed and no exception either time,
+     * which looks identical to "permission denied" from the caller's side.
+     * Since requestLegacyExternalStorage + WRITE_EXTERNAL_STORAGE (see the
+     * manifest) give this app real filesystem access on API 29 regardless
+     * of what MediaProvider itself does, this resolves the item's actual
+     * on-disk path (MediaStore's own DATA column - deprecated for
+     * *querying general file contents* on 29+, but still populated and
+     * fine to read for exactly this purpose) and deletes the real file
+     * directly, bypassing MediaProvider's delete() entirely. Also asks the
+     * resolver to drop the now-stale row so the library doesn't show a
+     * ghost entry pointing at a file that no longer exists. */
+    private fun directFileDeleteFallback(context: Context, uri: Uri): Boolean {
+        val path = try {
+            context.contentResolver.query(
+                uri, arrayOf(MediaStore.MediaColumns.DATA), null, null, null
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val idx = cursor.getColumnIndex(MediaStore.MediaColumns.DATA)
+                    if (idx >= 0) cursor.getString(idx) else null
+                } else null
+            }
+        } catch (e: Exception) {
+            null
+        } ?: return false
+
+        val file = File(path)
+        if (!file.exists()) return false
+        val deleted = try { file.delete() } catch (e: Exception) { false }
+        if (deleted) {
+            try { context.contentResolver.delete(uri, null, null) } catch (e: Exception) { /* best effort - row cleanup only */ }
+        }
+        return deleted
     }
 
     /** Restores the most recently deleted/trashed song, if any and if it's
@@ -216,7 +295,7 @@ object SongDeleter {
             }
             val dest = File(originalPath)
             dest.parentFile?.mkdirs()
-            if (trashedFile.renameTo(dest)) {
+            if (moveAcrossFilesystems(trashedFile, dest)) {
                 trashedStack.removeAt(trashedStack.lastIndex)
                 Outcome.Done(entry.song, undoable = false)
             } else {

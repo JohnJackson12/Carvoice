@@ -107,4 +107,19 @@ object Prefs {
     fun autoSkipIntro(context: Context): Boolean = prefs(context).getBoolean(KEY_AUTO_SKIP_INTRO, false)
     fun setAutoSkipIntro(context: Context, value: Boolean) =
         prefs(context).edit().putBoolean(KEY_AUTO_SKIP_INTRO, value).apply()
+
+    /** Digital gain multiplier applied to every raw mic sample BEFORE it
+     * reaches the recognizer (see MicCapture) - on top of whatever the
+     * platform's own AutomaticGainControl effect does. 1.0 = unprocessed
+     * hardware level. Needed because a lot of car head units simply have
+     * a much quieter mic input stage than a phone does, and
+     * AutomaticGainControl isn't available/effective on every SoC - a
+     * software boost is the only remaining lever in that case. Default of
+     * 3.0 is deliberately hot (most phones would never need this) since
+     * this app's whole reason for existing is being usable hands-free
+     * from a normal seated driving distance, not a phone held up close. */
+    private const val KEY_MIC_SENSITIVITY = "mic_sensitivity"
+    fun micSensitivity(context: Context): Float = prefs(context).getFloat(KEY_MIC_SENSITIVITY, 3.0f)
+    fun setMicSensitivity(context: Context, value: Float) =
+        prefs(context).edit().putFloat(KEY_MIC_SENSITIVITY, value.coerceIn(1f, 10f)).apply()
 }

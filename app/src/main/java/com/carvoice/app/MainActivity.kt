@@ -36,9 +36,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var nowPlayingTitle: TextView
     private lateinit var nowPlayingArtist: TextView
     private lateinit var seekBar: SeekBar
+    private lateinit var trimOverlay: TrimOverlayView
+    private lateinit var applyTrimButton: ImageButton
     private lateinit var volumeSeekBar: SeekBar
-    private lateinit var trimStartSeekBar: SeekBar
-    private lateinit var trimEndSeekBar: SeekBar
     private lateinit var trimLabel: TextView
     private lateinit var ratingRow: LinearLayout
     private lateinit var playPauseButton: ImageButton
@@ -93,6 +93,16 @@ class MainActivity : AppCompatActivity() {
                 // that code path on those devices.
                 perms.add(Manifest.permission.BLUETOOTH_CONNECT)
             }
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+                // Needed on API 29 (Android 10) specifically, alongside the
+                // manifest's requestLegacyExternalStorage, for delete/trim
+                // to actually be able to write/remove a file this app
+                // didn't create itself - see the manifest's own comment on
+                // this permission for the full story. A no-op request on
+                // API 30+ (declared maxSdkVersion 29), which is why this
+                // branch checks < R rather than requesting it everywhere.
+                perms.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            }
             return perms.toTypedArray()
         }
 
@@ -107,8 +117,8 @@ class MainActivity : AppCompatActivity() {
         nowPlayingArtist = findViewById(R.id.nowPlayingArtist)
         seekBar = findViewById(R.id.seekBar)
         volumeSeekBar = findViewById(R.id.volumeSeekBar)
-        trimStartSeekBar = findViewById(R.id.trimStartSeekBar)
-        trimEndSeekBar = findViewById(R.id.trimEndSeekBar)
+        trimOverlay = findViewById(R.id.trimOverlay)
+        applyTrimButton = findViewById(R.id.applyTrimButton)
         trimLabel = findViewById(R.id.trimLabel)
         ratingRow = findViewById(R.id.ratingRow)
         buildRatingStars()
@@ -159,28 +169,28 @@ class MainActivity : AppCompatActivity() {
             }
         })
 
-        // Trim start/end - saved (and applied - it seeks past the new
-        // start point right away) the moment you let go of the slider,
-        // same "drag to set, it's already saved" feel as the Windows
-        // app's trim handles. Both sliders share one apply function since
-        // the service call and the label always need both values together.
-        val applyTrim = {
-            VoiceService.instance?.setTrim(trimStartSeekBar.progress, trimEndSeekBar.progress)
+        // Trim dots on the main seek bar (see TrimOverlayView) - every
+        // drag tick both updates the label AND applies live via
+        // VoiceService.setTrim, same "it's already saved" feel as before,
+        // just genuinely real-time now instead of only on release (cheap:
+        // this just updates the non-destructive playback skip metadata,
+        // not the file). The scissors button is the separate, deliberate
+        // action that actually cuts the file - see applyTrimButton below.
+        trimOverlay.onTrimChanged = { front, end ->
+            updateTrimLabel(front, end)
+            VoiceService.instance?.setTrim(front, end)
         }
-        trimStartSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
-                if (fromUser) updateTrimLabel(progress, trimEndSeekBar.progress)
+        applyTrimButton.setOnClickListener {
+            val svc = VoiceService.instance
+            if (svc == null) {
+                Toast.makeText(this, "Player isn't ready yet", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
             }
-            override fun onStartTrackingTouch(sb: SeekBar?) {}
-            override fun onStopTrackingTouch(sb: SeekBar?) { applyTrim() }
-        })
-        trimEndSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
-                if (fromUser) updateTrimLabel(trimStartSeekBar.progress, progress)
+            svc.applyRealTrim { success, message ->
+                Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+                logActivity(if (success) "Trim applied - file overwritten" else "Trim not applied: $message")
             }
-            override fun onStartTrackingTouch(sb: SeekBar?) {}
-            override fun onStopTrackingTouch(sb: SeekBar?) { applyTrim() }
-        })
+        }
 
         playPauseButton.setOnClickListener {
             val svc = VoiceService.instance ?: return@setOnClickListener
@@ -227,6 +237,7 @@ class MainActivity : AppCompatActivity() {
                 if (!userIsDraggingSeekBar) {
                     seekBar.max = duration.coerceAtLeast(1)
                     seekBar.progress = position
+                    trimOverlay.durationMs = duration
                 }
                 // Previously the seek bar gave no sense at all of how far
                 // into the song you were - elapsed counts up, remaining
@@ -245,8 +256,7 @@ class MainActivity : AppCompatActivity() {
         }
         VoiceService.trimCallback = { front, end ->
             runOnUiThread {
-                trimStartSeekBar.progress = front
-                trimEndSeekBar.progress = end
+                trimOverlay.setTrimSilently(front, end)
                 updateTrimLabel(front, end)
             }
         }
@@ -286,8 +296,7 @@ class MainActivity : AppCompatActivity() {
         VoiceService.instance?.let {
             setRatingStars(it.currentRating())
             val (front, end) = it.currentTrim()
-            trimStartSeekBar.progress = front
-            trimEndSeekBar.progress = end
+            trimOverlay.setTrimSilently(front, end)
             updateTrimLabel(front, end)
         }
         refreshArtworkPanels()

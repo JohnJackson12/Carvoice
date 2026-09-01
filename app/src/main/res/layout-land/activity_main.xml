@@ -273,11 +273,25 @@
             android:textSize="14sp"
             android:textColor="?android:attr/textColorSecondary" />
 
-        <SeekBar
-            android:id="@+id/seekBar"
+        <!-- Trim dots live directly on top of this same bar now (see
+             TrimOverlayView) rather than in two separate, easy-to-miss
+             SeekBars below - dragging near either end of the bar moves a
+             trim point, dragging anywhere else scrubs playback as before. -->
+        <FrameLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp" />
+            android:layout_marginTop="8dp">
+
+            <SeekBar
+                android:id="@+id/seekBar"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content" />
+
+            <com.carvoice.app.TrimOverlayView
+                android:id="@+id/trimOverlay"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+        </FrameLayout>
 
         <!-- Elapsed / remaining time - previously the seek bar gave no
              indication at all of how far into the song you were. -->
@@ -378,36 +392,32 @@
                 android:max="100" />
         </LinearLayout>
 
-        <TextView
-            android:id="@+id/trimLabel"
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="Trim: start 0s, end 0s"
-            android:textSize="12sp"
-            android:textColor="?android:attr/textColorSecondary" />
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginTop="16dp">
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Trim start"
-            android:textSize="11sp" />
-        <SeekBar
-            android:id="@+id/trimStartSeekBar"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:max="60" />
+            <TextView
+                android:id="@+id/trimLabel"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Trim: start 0s, end 0s (drag the dots on the bar above)"
+                android:textSize="12sp"
+                android:textColor="?android:attr/textColorSecondary" />
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Trim end"
-            android:textSize="11sp" />
-        <SeekBar
-            android:id="@+id/trimEndSeekBar"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:max="60" />
+            <ImageButton
+                android:id="@+id/applyTrimButton"
+                style="?attr/borderlessButtonStyle"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:layout_marginStart="8dp"
+                android:contentDescription="Apply trim - permanently cuts the file"
+                android:src="@drawable/ic_trim_apply"
+                app:tint="?android:attr/textColorPrimary" />
+        </LinearLayout>
 
         <TextView
             android:layout_width="match_parent"

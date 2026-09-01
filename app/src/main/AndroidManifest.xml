@@ -18,6 +18,20 @@
     <!-- Pre-API-33 fallback for reading files -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
+    <!-- Writing/deleting/renaming files directly, needed on API 29 (Android
+         10) specifically: MANAGE_EXTERNAL_STORAGE below doesn't exist as a
+         grantable permission until API 30, so on a real Android-10 device
+         this (plus requestLegacyExternalStorage on the <application> tag
+         below) is what actually lets SongDeleter/AudioTrimmer touch a file
+         another app (or the OS media scanner) created - without it, every
+         delete/trim on API 29 falls straight to "may be read-only" even
+         when RecoverableSecurityException consent was granted, because the
+         classic storage permission check underneath still fails on plenty
+         of real-world (especially aftermarket/car-head-unit) ROMs. Harmless
+         no-op on API 30+, where scoped storage + MANAGE_EXTERNAL_STORAGE
+         supersede it entirely. -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29" />
     <!-- Lets FolderBrowserActivity list/read any folder in shared storage
          directly, without any OS document-picker app being involved at
          all. Added specifically because some bare-bones/car-head-unit
@@ -35,6 +49,7 @@
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
+        android:requestLegacyExternalStorage="true"
         android:theme="@style/Theme.CarVoicePlayer">
 
         <activity

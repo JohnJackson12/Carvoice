@@ -72,7 +72,7 @@ object CommandParser {
         val phrases = mutableListOf<String>()
         for (wake in wakePhrases(wakeWord, aliases)) {
             phrases.add(wake)
-            for (cmd in listOf("delete", "undo", "next", "previous", "pause", "play", "status")) {
+            for (cmd in listOf("delete", "undo", "next", "previous", "pause", "play", "status", "apply trim")) {
                 phrases.add("$wake $cmd")
             }
             for ((seconds, word) in SKIP_WORDS) {
@@ -138,7 +138,7 @@ object CommandParser {
      * without it, only the bare "play" (resume) matches. */
     fun parse(remainder: String, songTitleKeys: Set<String> = emptySet()): Command? {
         if (remainder.isBlank()) return null
-        val simple = setOf("delete", "undo", "next", "previous", "pause", "play", "status")
+        val simple = setOf("delete", "undo", "next", "previous", "pause", "play", "status", "apply trim")
         if (remainder in simple) return Command.Simple(remainder)
         if (remainder in VOCAL_SKIP_PHRASES) return Command.SkipToVocals
 
